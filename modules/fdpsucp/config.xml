@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<module>
+  <name>fdpsucp</name>
+  <displayName><![CDATA[Finance District UCP]]></displayName>
+  <version><![CDATA[0.1.0]]></version>
+  <description><![CDATA[Universal Commerce Protocol (UCP) endpoints for AI agent commerce.]]></description>
+  <author><![CDATA[Finance District]]></author>
+  <tab><![CDATA[others]]></tab>
+  <is_configurable>0</is_configurable>
+  <need_instance>0</need_instance>
+  <limited_countries></limited_countries>
+</module>

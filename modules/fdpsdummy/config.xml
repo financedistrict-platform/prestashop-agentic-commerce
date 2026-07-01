@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<module>
+  <name>fdpsdummy</name>
+  <displayName><![CDATA[Finance District UCP — Dummy Payment]]></displayName>
+  <version><![CDATA[0.1.0]]></version>
+  <description><![CDATA[Test payment handler for the UCP checkout flow. Always succeeds; no real gateway.]]></description>
+  <author><![CDATA[Finance District]]></author>
+  <tab><![CDATA[payments_gateways]]></tab>
+  <is_configurable>0</is_configurable>
+  <need_instance>0</need_instance>
+  <limited_countries></limited_countries>
+</module>

@@ -4,3 +4,7 @@
 vendor/
 .phpunit.cache/
 composer.lock
+
+# Internal working docs — not part of the published module repo
+BUILD_PLAN.md
+REQUIREMENTS.md
