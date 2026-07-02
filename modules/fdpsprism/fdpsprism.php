@@ -34,7 +34,7 @@ class FdPsPrism extends PaymentModule
 
         parent::__construct();
 
-        $this->displayName = $this->trans('Finance District UCP — Prism Payment', [], 'Modules.Fdpsprism.Admin');
+        $this->displayName = $this->trans('FD Prism Payment', [], 'Modules.Fdpsprism.Admin');
         $this->description = $this->trans(
             'Prism stablecoin payment handler for the UCP checkout flow. Settles AI-agent payments on-chain via the Prism gateway.',
             [],

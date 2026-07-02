@@ -28,7 +28,7 @@ class FdPsDummy extends PaymentModule
 
         parent::__construct();
 
-        $this->displayName = $this->trans('Finance District UCP — Dummy Payment', [], 'Modules.Fdpsdummy.Admin');
+        $this->displayName = $this->trans('FD Dummy Payment', [], 'Modules.Fdpsdummy.Admin');
         $this->description = $this->trans(
             'Test payment handler for the UCP checkout flow. Always succeeds; no real gateway. For local testing only.',
             [],
