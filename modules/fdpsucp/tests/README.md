@@ -33,8 +33,14 @@ Run from the host (needs `curl` + `python`/`python3`). Targets the store's
 cd modules/fdpsucp/tests/curl
 
 # full journey with pass/fail summary (discovery -> catalog -> checkout ->
-# complete -> order, plus cart flow and error cases)
+# complete -> order, plus cart flow and error cases). Completing an order needs
+# a payment handler installed (dummy for wallet-free testing).
 BASE_URL=http://localhost:8080 bash 30-integration-test.sh
+
+# Prism handler check (no settlement): advertised -> quote embedded ->
+# ready_for_complete -> cancel. Needs Prism configured in the BO, no wallet/funds.
+# Skips cleanly if Prism isn't configured. Mirrors woo's 30-prism-integration-test.
+BASE_URL=http://localhost:8080 bash 31-prism-integration-test.sh
 
 # individual steps (each prints the JSON response)
 bash 01-discovery.sh
