@@ -39,8 +39,8 @@ VER=$(jval "$DISC" "d['ucp']['version']")
 [ -n "$VER" ] && pass "discovery returns ucp.version ($VER)" || fail "discovery ucp.version" "empty"
 ENDPOINT=$(jval "$DISC" "d['ucp']['services']['dev.ucp.shopping'][0]['endpoint']")
 case "$ENDPOINT" in
-  */ucp/v1) pass "endpoint advertises /ucp/v1 ($ENDPOINT)" ;;
-  *) fail "endpoint" "expected .../ucp/v1, got '$ENDPOINT'" ;;
+  */module/fdpsucp/api) pass "endpoint advertises /module/fdpsucp/api ($ENDPOINT)" ;;
+  *) fail "endpoint" "expected .../module/fdpsucp/api, got '$ENDPOINT'" ;;
 esac
 CAPS=$(jval "$DISC" "len(d['ucp']['capabilities'])")
 [ "${CAPS:-0}" -ge 6 ] 2>/dev/null && pass "discovery lists >=6 capabilities ($CAPS)" || fail "capabilities" "got ${CAPS:-0}"

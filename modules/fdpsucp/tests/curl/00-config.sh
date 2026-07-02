@@ -9,7 +9,7 @@
 # default it to the /ucp/v1 native route the module advertises.
 
 BASE_URL="${BASE_URL:-http://localhost:8080}"
-UCP_API="${UCP_API:-$BASE_URL/ucp/v1}"
+UCP_API="${UCP_API:-$BASE_URL/module/fdpsucp/api}"
 
 # Optional bearer token (auth is token-OPTIONAL by default).
 AUTH=()

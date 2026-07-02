@@ -27,7 +27,7 @@ Or, with Composer available: `composer install && vendor/bin/phpunit`.
 ## Curl functional tests
 
 Run from the host (needs `curl` + `python`/`python3`). Targets the store's
-`/ucp/v1` endpoint; override `BASE_URL` for other stores.
+`/module/fdpsucp/api` endpoint; override `BASE_URL` for other stores.
 
 ```bash
 cd modules/fdpsucp/tests/curl

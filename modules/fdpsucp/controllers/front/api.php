@@ -3,12 +3,14 @@
  * UCP shopping-service entry point.
  *
  * The discovery document advertises this controller as the `endpoint`. It is
- * served at the clean /ucp/v1/<ucp-path> namespace via the module's
- * hookModuleRoutes (requires Friendly URLs); the remainder of the path arrives
- * in the `ucp_path` param, e.g.:
- *   POST /ucp/v1/catalog/search
- *   POST /ucp/v1/checkout-sessions
- *   GET  /ucp/v1/checkout-sessions/{id}
+ * served at /module/fdpsucp/api/<ucp-path> via a web-server rewrite (works with
+ * Friendly URLs off, which the Back Office needs); the remainder of the path
+ * arrives in the `ucp_path` param, e.g.:
+ *   POST /module/fdpsucp/api/catalog/search
+ *   POST /module/fdpsucp/api/checkout-sessions
+ *   GET  /module/fdpsucp/api/checkout-sessions/{id}
+ * (A clean /ucp/v1/<ucp-path> route via hookModuleRoutes is also available when
+ * Friendly URLs are enabled.)
  *
  * All routing then happens in FD\PrismUcp\Router. The resolved shop comes
  * from PrestaShop's native domain dispatch (multistore, FR-15).
@@ -55,7 +57,7 @@ class FdPsUcpApiModuleFrontController extends ModuleFrontController
         $fingerprint = hash('sha256', (string) ($headers['ucp-agent'] ?? ''));
 
         $registry = PaymentRegistry::collect();
-        $endpointBase = rtrim($this->context->link->getBaseLink(), '/') . '/ucp/v1';
+        $endpointBase = rtrim($this->context->link->getBaseLink(), '/') . '/module/fdpsucp/api';
 
         try {
             $router = new Router($this->context, $registry, $endpointBase, $fingerprint);

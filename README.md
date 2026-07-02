@@ -27,11 +27,11 @@ AI Agent                        Your PrestaShop Store                   Prism Ga
    |───────────────────────────────────>|                                    |
    |  <- capabilities, payment config   |                                    |
    |                                    |                                    |
-   |  POST /ucp/v1/catalog/search       |                                    |
+   |  POST /module/fdpsucp/api/catalog/search       |                                    |
    |───────────────────────────────────>|                                    |
    |  <- products                       |                                    |
    |                                    |                                    |
-   |  POST /ucp/v1/checkout-sessions    |  POST /payment-requirements        |
+   |  POST /module/fdpsucp/api/checkout-sessions    |  POST /payment-requirements        |
    |───────────────────────────────────>|───────────────────────────────────>|
    |  <- session + payment accepts[]    |  <- network, asset, amount, payTo  |
    |                                    |                                    |
@@ -76,7 +76,7 @@ Three modules. Core works standalone; payment handlers are optional modules that
 
 | Module | Description |
 |--------|-------------|
-| [`modules/fdpsucp`](modules/fdpsucp) | UCP protocol layer — discovery, catalog, cart, checkout sessions, orders. Serves the shopping service at `/ucp/v1` (native routing) and defines the payment-handler interface any provider can implement. |
+| [`modules/fdpsucp`](modules/fdpsucp) | UCP protocol layer — discovery, catalog, cart, checkout sessions, orders. Serves the shopping service at `/module/fdpsucp/api` (via a web-server rewrite) and defines the payment-handler interface any provider can implement. |
 | [`modules/fdpsprism`](modules/fdpsprism) | [Prism](https://developers.fd.xyz) payment handler — on-chain stablecoin settlement (x402 / ERC-3009). Per-shop gateway URL + API key in its own BO settings screen. |
 | [`modules/fdpsdummy`](modules/fdpsdummy) | Test handler that always succeeds. Useful for developing against the checkout flow without a wallet or testnet funds. |
 
@@ -86,7 +86,7 @@ Three modules. Core works standalone; payment handlers are optional modules that
 
 - PrestaShop 1.7.8+ / 8.x / 9.x
 - PHP 8.1+
-- **Friendly URLs enabled** (Shop Parameters → SEO & URLs) — the shopping service is served at the clean `/ucp/v1` namespace via a module route
+- A web-server rewrite for `/.well-known/ucp` and `/module/fdpsucp/api/*` (see [`fd-prestashop-demo/apache-fd-ucp.conf`](../fd-prestashop-demo/apache-fd-ucp.conf)). Both work with **Friendly URLs off** — recommended on the official `prestashop:9.1` image, where Friendly URLs on make the Back Office generate admin links without `index.php` that 404. (A clean `/ucp/v1` route via `hookModuleRoutes` is available if you keep Friendly URLs on.)
 - A [Prism](https://developers.fd.xyz) account (for real payments)
 
 ### As PrestaShop modules
@@ -131,7 +131,7 @@ Set `FDPSUCP_AGENT_TOKEN` in `ps_configuration` to require agents to send a bear
 
 ## API Reference
 
-All shopping endpoints are served under `/ucp/v1` (advertised as the `endpoint` in discovery).
+All shopping endpoints are served under `/module/fdpsucp/api` (advertised as the `endpoint` in discovery).
 
 ### Discovery
 
@@ -143,34 +143,34 @@ All shopping endpoints are served under `/ucp/v1` (advertised as the `endpoint` 
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| `POST` | `/ucp/v1/catalog/search` | Product search |
-| `POST` | `/ucp/v1/catalog/lookup` | Product lookup by ID |
+| `POST` | `/module/fdpsucp/api/catalog/search` | Product search |
+| `POST` | `/module/fdpsucp/api/catalog/lookup` | Product lookup by ID |
 
 ### Cart
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| `POST` | `/ucp/v1/carts` | Create cart |
-| `GET` | `/ucp/v1/carts/{id}` | Get cart |
-| `PUT` | `/ucp/v1/carts/{id}` | Update cart |
-| `DELETE` | `/ucp/v1/carts/{id}` | Delete cart |
-| `POST` | `/ucp/v1/carts/{id}/checkout` | Convert cart to checkout session |
+| `POST` | `/module/fdpsucp/api/carts` | Create cart |
+| `GET` | `/module/fdpsucp/api/carts/{id}` | Get cart |
+| `PUT` | `/module/fdpsucp/api/carts/{id}` | Update cart |
+| `DELETE` | `/module/fdpsucp/api/carts/{id}` | Delete cart |
+| `POST` | `/module/fdpsucp/api/carts/{id}/checkout` | Convert cart to checkout session |
 
 ### Checkout
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| `POST` | `/ucp/v1/checkout-sessions` | Create checkout session |
-| `GET` | `/ucp/v1/checkout-sessions/{id}` | Get session status |
-| `PUT` | `/ucp/v1/checkout-sessions/{id}` | Update session (buyer, fulfillment, items) |
-| `POST` | `/ucp/v1/checkout-sessions/{id}/complete` | Complete with payment credential |
-| `POST` | `/ucp/v1/checkout-sessions/{id}/cancel` | Cancel session |
+| `POST` | `/module/fdpsucp/api/checkout-sessions` | Create checkout session |
+| `GET` | `/module/fdpsucp/api/checkout-sessions/{id}` | Get session status |
+| `PUT` | `/module/fdpsucp/api/checkout-sessions/{id}` | Update session (buyer, fulfillment, items) |
+| `POST` | `/module/fdpsucp/api/checkout-sessions/{id}/complete` | Complete with payment credential |
+| `POST` | `/module/fdpsucp/api/checkout-sessions/{id}/cancel` | Cancel session |
 
 ### Orders
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| `GET` | `/ucp/v1/orders/{id}` | Get order details |
+| `GET` | `/module/fdpsucp/api/orders/{id}` | Get order details |
 
 ### UCP Capabilities
 

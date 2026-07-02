@@ -27,7 +27,7 @@ from referencing import Registry, Resource
 from referencing.jsonschema import DRAFT202012
 
 BASE_URL = os.environ.get("BASE_URL", "http://localhost:8080").rstrip("/")
-UCP_API = os.environ.get("UCP_API", f"{BASE_URL}/ucp/v1").rstrip("/")
+UCP_API = os.environ.get("UCP_API", f"{BASE_URL}/module/fdpsucp/api").rstrip("/")
 
 # Default: repo_root/tools/ucp/source/schemas  (script is …/fdpsucp/tests/conformance)
 DEFAULT_SCHEMAS = Path(__file__).resolve().parents[5] / "tools" / "ucp" / "source" / "schemas"

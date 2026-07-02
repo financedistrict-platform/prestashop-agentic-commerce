@@ -7,8 +7,8 @@
  *   /module/fdpsucp/discovery                                  (when friendly URLs are on)
  *   /.well-known/ucp                                           (via web-server rewrite → this controller)
  *
- * The advertised `endpoint` (the shopping service) is /ucp/v1, served natively
- * via the module's hookModuleRoutes (requires Friendly URLs).
+ * The advertised `endpoint` (the shopping service) is /module/fdpsucp/api, via a
+ * web-server rewrite (works with Friendly URLs off, which the Back Office needs).
  *
  * Serves a per-shop profile (multistore): the shop is resolved by PrestaShop's
  * native domain dispatch, and the advertised payment_handlers reflect whatever
@@ -32,9 +32,12 @@ class FdPsUcpDiscoveryModuleFrontController extends ModuleFrontController
 
     public function initContent()
     {
-        // The shopping service is served at the clean /ucp/v1 namespace via the
-        // module's hookModuleRoutes. Requires Friendly URLs to be enabled.
-        $endpoint = rtrim($this->context->link->getBaseLink(), '/') . '/ucp/v1';
+        // The shopping service is served at /module/fdpsucp/api (via a web-server
+        // rewrite to the api front controller). This works with Friendly URLs OFF,
+        // which the PrestaShop admin requires to stay navigable in the official
+        // image. (A clean /ucp/v1 route via hookModuleRoutes is available when
+        // Friendly URLs are on, but that breaks Back-Office navigation here.)
+        $endpoint = rtrim($this->context->link->getBaseLink(), '/') . '/module/fdpsucp/api';
         $storeName = Configuration::get('PS_SHOP_NAME') ?: 'PrestaShop';
         $registry = PaymentRegistry::collect();
 
