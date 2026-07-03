@@ -38,6 +38,11 @@ final class Router
         $method = strtoupper($method);
         $idempotencyKey = $headers['idempotency-key'] ?? null;
 
+        // Per-resource capability secret: minted at create, returned once, and
+        // required on every later read/mutation. This — not the spoofable
+        // UCP-Agent header — is what makes a session/cart private to its creator.
+        $sessionSecret = (string) ($headers['ucp-session-secret'] ?? '');
+
         // /catalog/...
         if (($segments[0] ?? '') === 'catalog') {
             $catalog = new CatalogService($this->context);
@@ -52,7 +57,7 @@ final class Router
 
         // /carts[/{id}[/checkout]]
         if (($segments[0] ?? '') === 'carts') {
-            $cart = new CartService($this->context, $this->registry, $this->endpointBase, $this->agentFingerprint);
+            $cart = new CartService($this->context, $this->registry, $this->endpointBase, $this->agentFingerprint, $sessionSecret);
             $id = $segments[1] ?? null;
             $action = $segments[2] ?? null;
 
@@ -79,7 +84,7 @@ final class Router
 
         // /checkout-sessions[/{id}[/complete|cancel]]
         if (($segments[0] ?? '') === 'checkout-sessions') {
-            $checkout = new CheckoutService($this->context, $this->registry, $this->endpointBase, $this->agentFingerprint);
+            $checkout = new CheckoutService($this->context, $this->registry, $this->endpointBase, $this->agentFingerprint, $sessionSecret);
             $id = $segments[1] ?? null;
             $action = $segments[2] ?? null;
 
@@ -106,7 +111,7 @@ final class Router
 
         // /orders/{id}
         if (($segments[0] ?? '') === 'orders') {
-            $order = new OrderService($this->context);
+            $order = new OrderService($this->context, $sessionSecret);
             $id = $segments[1] ?? null;
             if ($id !== null && $method === 'GET') {
                 return $order->get((int) $id);

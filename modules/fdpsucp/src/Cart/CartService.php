@@ -27,7 +27,8 @@ final class CartService
         private \Context $context,
         private PaymentRegistry $registry,
         private string $endpointBase,
-        private string $agentFingerprint
+        private string $agentFingerprint,
+        private string $sessionSecret = ''
     ) {
         $this->carts = new CartRepository();
     }
@@ -53,19 +54,25 @@ final class CartService
         }
 
         $uid = self::uuid();
+        $secret = bin2hex(random_bytes(32));
         $now = date('Y-m-d H:i:s');
         $this->carts->insert([
             'cart_uid' => $uid,
             'id_shop' => $this->idShop(),
             'line_items' => json_encode($formatted),
             'agent_fingerprint' => $this->agentFingerprint,
+            'cart_secret_hash' => hash('sha256', $secret),
             'created_at' => $now,
             'updated_at' => $now,
         ]);
 
         $cart = $this->carts->findByUid($uid, $this->idShop());
 
-        return Response::json(201, $this->formatCart($cart));
+        $out = $this->formatCart($cart);
+        // Returned once at creation; required as `UCP-Session-Secret` thereafter.
+        $out['cart_secret'] = $secret;
+
+        return Response::json(201, $out);
     }
 
     // ------------------------------------------------------------------- get
@@ -276,15 +283,24 @@ final class CartService
         ];
     }
 
-    /** @param array<string,mixed> $cart */
+    /**
+     * Ownership is proven by the capability secret minted at cart creation
+     * (sent as `UCP-Session-Secret`), not the spoofable agent fingerprint.
+     * Carts created before 0.5.0 have no stored hash and remain accessible.
+     *
+     * @param array<string,mixed> $cart
+     */
     private function ownsCart(array $cart): bool
     {
-        $stored = (string) ($cart['agent_fingerprint'] ?? '');
-        if ($stored === '') {
+        $storedHash = (string) ($cart['cart_secret_hash'] ?? '');
+        if ($storedHash === '') {
             return true;
         }
+        if ($this->sessionSecret === '') {
+            return false;
+        }
 
-        return hash_equals($stored, $this->agentFingerprint);
+        return hash_equals($storedHash, hash('sha256', $this->sessionSecret));
     }
 
     private static function uuid(): string

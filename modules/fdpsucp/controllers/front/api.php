@@ -32,7 +32,8 @@ class FdPsUcpApiModuleFrontController extends ModuleFrontController
 {
     /** Agents are anonymous (their own token auth applies, not a customer login). */
     public $auth = false;
-    public $ssl = false;
+    /** The bearer token and buyer PII travel on this connection — require TLS. */
+    public $ssl = true;
 
     public function initContent()
     {
@@ -78,7 +79,8 @@ class FdPsUcpApiModuleFrontController extends ModuleFrontController
     private function emit(Response $response): void
     {
         header('Content-Type: application/json');
-        header('Access-Control-Allow-Origin: *');
+        // No CORS: agents call this server-to-server. A wildcard ACAO would let
+        // any web origin read authenticated responses (token + buyer PII).
         http_response_code($response->status);
         echo json_encode($response->body, JSON_UNESCAPED_SLASHES);
         exit;

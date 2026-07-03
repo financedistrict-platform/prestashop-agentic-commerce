@@ -68,6 +68,13 @@ final class DummyHandler implements PaymentHandlerInterface
      */
     public function settlePayment(array $input): array
     {
+        // Safety rail: this handler always "succeeds" with no real payment, so
+        // it must never place paid orders on a production store. Refuse unless
+        // the shop is explicitly in developer mode.
+        if (!(defined('_PS_MODE_DEV_') && _PS_MODE_DEV_)) {
+            return ['success' => false, 'error' => 'Dummy payment handler is disabled outside developer mode'];
+        }
+
         /** @var \Cart $cart */
         $cart = $input['cart'];
         if (!\Validate::isLoadedObject($cart)) {

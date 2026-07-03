@@ -84,6 +84,9 @@ final class CatalogService
         if (!is_array($ids) || $ids === []) {
             return UcpError::response('missing_ids', 'ids array is required', 400);
         }
+        // Bound the work per request (matches the search cap) so a giant ids[]
+        // can't force thousands of product loads in one call.
+        $ids = array_slice($ids, 0, 50);
 
         $idLang = (int) $this->context->language->id;
         $currencyIso = $this->context->currency->iso_code;

@@ -26,7 +26,8 @@ final class CheckoutService
         private \Context $context,
         private PaymentRegistry $registry,
         private string $endpointBase,
-        private string $agentFingerprint
+        private string $agentFingerprint,
+        private string $sessionSecret = ''
     ) {
         $this->sessions = new SessionRepository();
         $this->cartBuilder = new CartBuilder();
@@ -96,6 +97,7 @@ final class CheckoutService
         $paymentMeta = $this->registry->prepareAll($this->prepareInput(self::uuid(), $totals, $currency));
 
         $uid = self::uuid();
+        $secret = bin2hex(random_bytes(32));
         $now = date('Y-m-d H:i:s');
         $this->sessions->insert([
             'session_uid' => $uid,
@@ -108,6 +110,7 @@ final class CheckoutService
             'fulfillment' => $fulfillment ? json_encode($fulfillment) : null,
             'payment_meta' => json_encode($paymentMeta),
             'agent_fingerprint' => $this->agentFingerprint,
+            'session_secret_hash' => hash('sha256', $secret),
             'idempotency_key' => $idempotencyKey,
             'created_at' => $now,
             'updated_at' => $now,
@@ -115,7 +118,11 @@ final class CheckoutService
         ]);
 
         $session = $this->sessions->findByUid($uid, $this->idShop());
-        return Response::json(201, Formatter::checkoutSession($session, $this->registry));
+        $out = Formatter::checkoutSession($session, $this->registry);
+        // The capability secret is returned exactly once, at creation. The agent
+        // must store it and send it as `UCP-Session-Secret` on every later call.
+        $out['session_secret'] = $secret;
+        return Response::json(201, $out);
     }
 
     // ------------------------------------------------------------------- get
@@ -125,6 +132,9 @@ final class CheckoutService
         $session = $this->sessions->findByUid($uid, $this->idShop());
         if (!$session) {
             return UcpError::response('checkout_not_found', 'Checkout session not found', 404);
+        }
+        if (!$this->ownsSession($session)) {
+            return UcpError::response('session_ownership', 'Session belongs to a different agent', 403);
         }
         return Response::json(200, Formatter::checkoutSession($session, $this->registry));
     }
@@ -250,10 +260,11 @@ final class CheckoutService
     /** @param array<string,mixed> $body */
     public function complete(string $uid, array $body, ?string $idempotencyKey): Response
     {
-        // Idempotency: replay a prior completion (NFR-3).
+        // Idempotency: replay a prior completion (NFR-3). Only the owner of the
+        // prior session (capability-secret holder) may replay it.
         if ($idempotencyKey) {
             $prior = $this->sessions->findByIdempotencyKey($idempotencyKey, $this->idShop());
-            if ($prior && $prior['status'] === 'completed' && !empty($prior['id_order'])) {
+            if ($prior && $this->ownsSession($prior) && $prior['status'] === 'completed' && !empty($prior['id_order'])) {
                 $order = new \Order((int) $prior['id_order']);
                 if (\Validate::isLoadedObject($order)) {
                     return Response::json(200, Formatter::completeResponse($prior, $order, $this->registry));
@@ -430,14 +441,25 @@ final class CheckoutService
         return $buyer === [] ? null : $buyer;
     }
 
-    /** @param array<string,mixed> $session */
+    /**
+     * A session is owned by whoever presents the capability secret minted at
+     * creation. The secret is never echoed back after create, so it can't be
+     * lifted from a later response or a spoofable header (unlike the old
+     * agent-fingerprint check). Sessions created before 0.5.0 have no stored
+     * hash and remain accessible (legacy compatibility).
+     *
+     * @param array<string,mixed> $session
+     */
     private function ownsSession(array $session): bool
     {
-        $stored = (string) ($session['agent_fingerprint'] ?? '');
-        if ($stored === '') {
+        $storedHash = (string) ($session['session_secret_hash'] ?? '');
+        if ($storedHash === '') {
             return true;
         }
-        return hash_equals($stored, $this->agentFingerprint);
+        if ($this->sessionSecret === '') {
+            return false;
+        }
+        return hash_equals($storedHash, hash('sha256', $this->sessionSecret));
     }
 
     private static function uuid(): string

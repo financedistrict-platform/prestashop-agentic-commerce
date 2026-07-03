@@ -119,9 +119,25 @@ See the [demo store](../fd-prestashop-demo) for a complete Docker Compose setup.
 2. Enter your **Prism Gateway URL** and **API Key** (stored per-shop)
 3. Save — the handler is advertised in discovery only once configured
 
-### Agent authentication (optional)
+### Agent authentication (closed by default)
 
-Set `FDPSUCP_AGENT_TOKEN` in `ps_configuration` to require agents to send a bearer token (`Authorization: Bearer <token>` or the `UCP-Agent-Token` header). When unset, the endpoints are open.
+Two layers protect the shopping endpoints:
+
+**1. Agent token (who may transact).** On install the module generates a random `FDPSUCP_AGENT_TOKEN`. View or regenerate it under **Modules → Finance District UCP → Configure**. Agents must send it on every request to the write/PII endpoints:
+
+```
+Authorization: Bearer <token>
+```
+
+Discovery (`/.well-known/ucp`) and catalog stay reachable so agents can find and browse the store. Regenerating the token immediately invalidates the old one.
+
+**2. Session secret (which session is yours).** Creating a cart or checkout session returns a one-time `cart_secret` / `session_secret` in the response body. Store it and send it back on every later call to that resource:
+
+```
+UCP-Session-Secret: <secret>
+```
+
+The secret is never echoed again after creation. Reads and mutations of a cart, checkout session, or its order require it — so one agent can never read or complete another agent's session, even when they share the same agent token. All endpoints require HTTPS.
 
 ### Prism Console Setup
 

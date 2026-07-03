@@ -28,7 +28,7 @@ class FdPsUcpDiscoveryModuleFrontController extends ModuleFrontController
 {
     /** No customer login required — agents are anonymous. */
     public $auth = false;
-    public $ssl = false;
+    public $ssl = true;
 
     public function initContent()
     {

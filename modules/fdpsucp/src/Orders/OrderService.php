@@ -16,7 +16,7 @@ if (!defined('_PS_VERSION_')) {
  */
 final class OrderService
 {
-    public function __construct(private \Context $context)
+    public function __construct(private \Context $context, private string $sessionSecret = '')
     {
     }
 
@@ -25,12 +25,22 @@ final class OrderService
         $idShop = (int) $this->context->shop->id;
 
         // Order must exist, belong to this shop, and have been placed via UCP.
-        $linked = (int) \Db::getInstance()->getValue(
-            'SELECT `id_order` FROM `' . _DB_PREFIX_ . 'prism_session`
+        $row = \Db::getInstance()->getRow(
+            'SELECT `id_order`, `session_secret_hash` FROM `' . _DB_PREFIX_ . 'prism_session`
              WHERE `id_order` = ' . (int) $idOrder . ' AND `id_shop` = ' . $idShop
         );
-        if ($linked === 0) {
+        if (!$row || (int) $row['id_order'] === 0) {
             return UcpError::response('order_not_found', 'Order not found', 404);
+        }
+
+        // Only the agent that owns the originating session (capability-secret
+        // holder) may read the order. A generic 404 avoids confirming existence.
+        $storedHash = (string) ($row['session_secret_hash'] ?? '');
+        if ($storedHash !== '') {
+            if ($this->sessionSecret === ''
+                || !hash_equals($storedHash, hash('sha256', $this->sessionSecret))) {
+                return UcpError::response('order_not_found', 'Order not found', 404);
+            }
         }
 
         $order = new \Order($idOrder);

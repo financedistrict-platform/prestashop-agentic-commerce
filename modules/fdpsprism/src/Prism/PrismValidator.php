@@ -27,23 +27,28 @@ final class PrismValidator
                 continue;
             }
 
-            // Match on asset (case-insensitive for checksum addresses).
-            if (!empty($accept['asset']) && !empty($summary['asset'])
-                && strcasecmp((string) $accept['asset'], (string) $summary['asset']) !== 0
+            // Fail closed: the signed credential MUST carry every field we
+            // guard on. A credential that omits asset/recipient/amount must be
+            // rejected, never waved through (money-movement guard, NFR-1).
+            if (empty($accept['asset']) || empty($summary['asset'])
+                || strcasecmp((string) $accept['asset'], (string) $summary['asset']) !== 0
             ) {
-                continue;
+                return 'Signed payment asset is missing or does not match the expected asset';
             }
 
-            // Recipient must match if both present.
-            if (!empty($accept['payTo']) && !empty($summary['to'])
-                && strcasecmp((string) $accept['payTo'], (string) $summary['to']) !== 0
+            // Recipient must be present and match exactly.
+            if (empty($accept['payTo']) || empty($summary['to'])
+                || strcasecmp((string) $accept['payTo'], (string) $summary['to']) !== 0
             ) {
-                return 'Signed payment recipient does not match the expected payTo address';
+                return 'Signed payment recipient is missing or does not match the expected payTo address';
             }
 
-            // Amount must not be short (BigInt-safe compare).
-            $storedAmount = (string) ($accept['amount'] ?? '0');
-            $signedAmount = (string) ($summary['value'] ?? '0');
+            // Amount must be present, numeric, and not short (BigInt-safe compare).
+            $storedAmount = (string) ($accept['amount'] ?? '');
+            $signedAmount = (string) ($summary['value'] ?? '');
+            if (!self::isNonNegativeInteger($storedAmount) || !self::isNonNegativeInteger($signedAmount)) {
+                return 'Signed payment amount is missing or not a valid integer';
+            }
             if (self::compareBigInt($signedAmount, $storedAmount) < 0) {
                 return "Signed amount ($signedAmount) is less than required ($storedAmount)";
             }
@@ -123,6 +128,12 @@ final class PrismValidator
         }
 
         return null;
+    }
+
+    /** A base-10 integer string with no sign, decimal point, or exponent. */
+    private static function isNonNegativeInteger(string $value): bool
+    {
+        return $value !== '' && ctype_digit($value);
     }
 
     /** BigInt-safe compare: -1 / 0 / 1. Uses bcmath/gmp when available. */

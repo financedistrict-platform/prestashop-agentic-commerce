@@ -176,4 +176,36 @@ final class PrismValidatorTest extends TestCase
         ];
         $this->assertTrue(PrismValidator::validate($summary, $accepts));
     }
+
+    // ── fail-closed guards (0.5.0) ───────────────────────────
+
+    public function test_missing_signed_recipient_fails(): void
+    {
+        $summary = ['network' => 'eip155:84532', 'asset' => '0xUsdc', 'value' => '1500000', 'to' => ''];
+        $accepts = [$this->accept('eip155:84532', '0xUsdc', '1500000', '0xPayTo')];
+
+        $result = PrismValidator::validate($summary, $accepts);
+        $this->assertIsString($result);
+        $this->assertStringContainsString('recipient', $result);
+    }
+
+    public function test_missing_signed_asset_fails(): void
+    {
+        $summary = ['network' => 'eip155:84532', 'asset' => '', 'value' => '1500000', 'to' => '0xPayTo'];
+        $accepts = [$this->accept('eip155:84532', '0xUsdc', '1500000', '0xPayTo')];
+
+        $result = PrismValidator::validate($summary, $accepts);
+        $this->assertIsString($result);
+        $this->assertStringContainsString('asset', $result);
+    }
+
+    public function test_non_integer_amount_fails(): void
+    {
+        $summary = ['network' => 'eip155:84532', 'asset' => '0xUsdc', 'value' => '15.00', 'to' => '0xPayTo'];
+        $accepts = [$this->accept('eip155:84532', '0xUsdc', '1500000', '0xPayTo')];
+
+        $result = PrismValidator::validate($summary, $accepts);
+        $this->assertIsString($result);
+        $this->assertStringContainsString('integer', $result);
+    }
 }
