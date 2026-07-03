@@ -212,11 +212,24 @@ final class CartService
         foreach ($lineItems as $item) {
             $idProduct = (int) ($item['item']['id'] ?? 0);
             $idAttr = (int) ($item['item']['variant_id'] ?? 0);
-            $qty = max(1, (int) ($item['quantity'] ?? 1));
+            $qty = (int) ($item['quantity'] ?? 1);
+            if ($qty < 1) {
+                return UcpError::response('invalid_quantity', "Quantity for product $idProduct must be a positive integer", 422);
+            }
 
             $product = new \Product($idProduct, false, $idLang);
             if (!\Validate::isLoadedObject($product) || !$product->active) {
                 return UcpError::response('invalid_product', "Product $idProduct not found or not purchasable", 422);
+            }
+            if (!\Product::isAvailableWhenOutOfStock((int) $product->out_of_stock)) {
+                $available = (int) \StockAvailable::getQuantityAvailableByProduct($idProduct, $idAttr ?: null);
+                if ($qty > $available) {
+                    return UcpError::response(
+                        'insufficient_stock',
+                        "Requested quantity ($qty) exceeds available stock ($available) for product $idProduct",
+                        422
+                    );
+                }
             }
 
             $price = Formatter::toMinor((float) \Product::getPriceStatic($idProduct, true, $idAttr ?: null));

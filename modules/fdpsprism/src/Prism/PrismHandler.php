@@ -50,6 +50,13 @@ final class PrismHandler implements PaymentHandlerInterface
     /** @return array<string,array<int,array<string,mixed>>> */
     public function getUcpDiscoveryHandlers(): array
     {
+        // Don't advertise a handler that can't actually settle: an unconfigured
+        // gateway (no API key) is omitted from discovery so agents never pick a
+        // payment method that would fail at settlement.
+        if (!ConfigResolver::isConfigured()) {
+            return [];
+        }
+
         // The Prism handler is an external component with its own version and docs:
         // spec/config_schema are served by the resolved gateway, not ucp.dev.
         $gateway = ConfigResolver::apiUrl();
