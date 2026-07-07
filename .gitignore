@@ -1,0 +1,21 @@
+.DS_Store
+*.swp
+*.swo
+vendor/
+.phpunit.cache/
+composer.lock
+
+# Internal working docs — not part of the published module repo
+BUILD_PLAN.md
+REQUIREMENTS.md
+
+# PrestaShop regenerates this module metadata cache on install
+modules/*/config.xml
+
+# OS / editor
+Thumbs.db
+.idea/
+.vscode/
+
+# Built distribution artifacts
+*.zip
