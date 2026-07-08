@@ -92,6 +92,9 @@ def main() -> int:
     validate("/.well-known/ucp conforms to profile.json", f"{S}/profile.json", disc)
 
     # 2. Catalog search -> catalog_search.json#/$defs/search_response
+    # NOTE: catalog prices are intentionally major-units floats (agent budgeting +
+    # WC/Shopware parity), so `price_range.*.amount` will report as "not integer"
+    # against the spec's amount:integer type. That divergence is expected here.
     print("\n2. Catalog")
     _, search = http_json("POST", f"{UCP_API}/catalog/search", {"limit": 5})
     validate("catalog/search conforms to search_response",

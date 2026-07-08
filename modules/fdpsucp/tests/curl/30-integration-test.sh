@@ -52,6 +52,11 @@ echo ""; echo "2. Catalog"
 SEARCH=$(curl -s "${AUTH[@]}" -X POST "$UCP_API/catalog/search" -H 'Content-Type: application/json' -d '{"limit":5}')
 PRODUCT_ID=$(jval "$SEARCH" "d['products'][0]['id']")
 [ -n "$PRODUCT_ID" ] && pass "catalog search returns a product (id=$PRODUCT_ID)" || fail "catalog search" "no products"
+# Catalog prices must be major-units floats (e.g. 11.55), not minor-unit ints
+# (1155). A JSON float parses to a Python float; a minor-unit int parses to int.
+PRICE_IS_FLOAT=$(jval "$SEARCH" "isinstance(d['products'][0]['price_range']['min']['amount'], float)")
+[ "$PRICE_IS_FLOAT" = "True" ] && pass "catalog price is major-units (float)" \
+  || fail "catalog price format" "expected major-units float, got a non-float (minor-unit cents?)"
 if [ -n "$PRODUCT_ID" ]; then
   LOOKUP=$(curl -s "${AUTH[@]}" -X POST "$UCP_API/catalog/lookup" -H 'Content-Type: application/json' -d "{\"ids\":[\"$PRODUCT_ID\"]}")
   LID=$(jval "$LOOKUP" "d['products'][0]['id']")

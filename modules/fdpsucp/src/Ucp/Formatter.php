@@ -10,7 +10,12 @@ if (!defined('_PS_VERSION_')) {
 
 /**
  * Maps PrestaShop entities <-> UCP wire shapes. Ported from FD_UCP_Formatter.
- * Monetary amounts are integer minor units (cents).
+ *
+ * Order/checkout amounts are integer minor units (cents) — the UCP `amount` type.
+ * Catalog product prices are the deliberate exception: major-units floats (e.g.
+ * 11.55) so agents can budget/filter by price without a 100x error, matching the
+ * WooCommerce and Shopware catalog handlers. (This knowingly diverges from the
+ * UCP `amount: integer` schema on the browse surface; settlement is unaffected.)
  */
 final class Formatter
 {
@@ -97,7 +102,9 @@ final class Formatter
     public static function product(\Product $product, int $idLang, string $currencyIso, \Link $link): array
     {
         $idProduct = (int) $product->id;
-        $price = self::toMinor((float) \Product::getPriceStatic($idProduct, true));
+        // Major-units float (e.g. 11.55), NOT minor-unit cents — this is the catalog
+        // browse price agents filter/budget on. Order/checkout amounts stay minor.
+        $price = (float) \Product::getPriceStatic($idProduct, true);
         $name = is_array($product->name) ? ($product->name[$idLang] ?? reset($product->name)) : $product->name;
         $shortDesc = is_array($product->description_short)
             ? ($product->description_short[$idLang] ?? '')
@@ -132,7 +139,7 @@ final class Formatter
             }
             $prices = [];
             foreach ($grouped as $idAttr => $data) {
-                $variantPrice = self::toMinor((float) \Product::getPriceStatic($idProduct, true, $idAttr));
+                $variantPrice = (float) \Product::getPriceStatic($idProduct, true, $idAttr);
                 $prices[] = $variantPrice;
                 $available = \StockAvailable::getQuantityAvailableByProduct($idProduct, $idAttr) > 0;
                 $formatted['variants'][] = [
