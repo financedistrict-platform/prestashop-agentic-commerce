@@ -21,33 +21,49 @@ final class PrismValidator
      */
     public static function validate(array $summary, array $accepts)
     {
+        // Fail closed on an incomplete credential: the signed summary MUST carry
+        // every field we guard on, independent of which accept it matches. These
+        // are checked up front so the per-accept loop below can `continue` past a
+        // non-matching accept (e.g. a different asset) without ever waving through
+        // a credential that simply omitted a field (money-movement guard, NFR-1).
+        if (empty($summary['asset'])) {
+            return 'Signed payment asset is missing';
+        }
+        if (empty($summary['to'])) {
+            return 'Signed payment recipient is missing';
+        }
+        $signedAmount = (string) ($summary['value'] ?? '');
+        if (!self::isNonNegativeInteger($signedAmount)) {
+            return 'Signed payment amount is missing or not a valid integer';
+        }
+
         foreach ($accepts as $accept) {
-            // Match on network.
+            // Network must match this accept.
             if (($accept['network'] ?? null) !== ($summary['network'] ?? null)) {
                 continue;
             }
 
-            // Fail closed: the signed credential MUST carry every field we
-            // guard on. A credential that omits asset/recipient/amount must be
-            // rejected, never waved through (money-movement guard, NFR-1).
-            if (empty($accept['asset']) || empty($summary['asset'])
+            // Asset must match — but a mismatch just means THIS accept is not the
+            // one; try the next. This is essential for multi-asset networks: e.g.
+            // if EURC is listed before USDC on the same network, a USDC payment
+            // must still match the USDC accept rather than be rejected at EURC.
+            if (empty($accept['asset'])
                 || strcasecmp((string) $accept['asset'], (string) $summary['asset']) !== 0
             ) {
-                return 'Signed payment asset is missing or does not match the expected asset';
+                continue;
             }
 
-            // Recipient must be present and match exactly.
-            if (empty($accept['payTo']) || empty($summary['to'])
+            // The accept now matches network + asset. Recipient and amount MUST
+            // hold — a mismatch here signals tampering, not a different accept.
+            if (empty($accept['payTo'])
                 || strcasecmp((string) $accept['payTo'], (string) $summary['to']) !== 0
             ) {
-                return 'Signed payment recipient is missing or does not match the expected payTo address';
+                return 'Signed payment recipient does not match the expected payTo address';
             }
 
-            // Amount must be present, numeric, and not short (BigInt-safe compare).
             $storedAmount = (string) ($accept['amount'] ?? '');
-            $signedAmount = (string) ($summary['value'] ?? '');
-            if (!self::isNonNegativeInteger($storedAmount) || !self::isNonNegativeInteger($signedAmount)) {
-                return 'Signed payment amount is missing or not a valid integer';
+            if (!self::isNonNegativeInteger($storedAmount)) {
+                return 'Stored payment requirement has an invalid amount';
             }
             if (self::compareBigInt($signedAmount, $storedAmount) < 0) {
                 return "Signed amount ($signedAmount) is less than required ($storedAmount)";

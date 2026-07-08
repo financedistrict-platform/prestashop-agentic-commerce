@@ -177,6 +177,19 @@ final class PrismValidatorTest extends TestCase
         $this->assertTrue(PrismValidator::validate($summary, $accepts));
     }
 
+    public function test_multi_asset_same_network_matches_later_asset(): void
+    {
+        // QA regression: EURC listed before USDC on the SAME network must not
+        // block a USDC payment — the loop must `continue` past the asset
+        // mismatch and match the USDC accept at the next index.
+        $summary = ['network' => 'eip155:84532', 'asset' => '0xUsdc', 'value' => '1500000', 'to' => '0xPayTo'];
+        $accepts = [
+            $this->accept('eip155:84532', '0xEurc', '1500000', '0xPayTo'),
+            $this->accept('eip155:84532', '0xUsdc', '1500000', '0xPayTo'),
+        ];
+        $this->assertTrue(PrismValidator::validate($summary, $accepts));
+    }
+
     // ── fail-closed guards (0.5.0) ───────────────────────────
 
     public function test_missing_signed_recipient_fails(): void
