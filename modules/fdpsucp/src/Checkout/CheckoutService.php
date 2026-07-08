@@ -7,6 +7,7 @@ use FD\PrismUcp\Payment\PaymentRegistry;
 use FD\PrismUcp\Ucp\Formatter;
 use FD\PrismUcp\Ucp\SessionRepository;
 use FD\PrismUcp\Ucp\UcpError;
+use FD\PrismUcp\Ucp\UcpStatus;
 
 if (!defined('_PS_VERSION_')) {
     exit;
@@ -43,6 +44,26 @@ final class CheckoutService
     /** @param array<string,mixed> $body */
     public function create(array $body, ?string $idempotencyKey): Response
     {
+        // Idempotency (NFR-3, QA): a retried create with the same key returns the
+        // original session instead of inserting a duplicate. The one-time session
+        // secret is re-issued — the first response may not have reached the agent
+        // (that's why they retried). Scoped to the same agent fingerprint so one
+        // agent's key can never resurface another agent's session.
+        if ($idempotencyKey) {
+            $prior = $this->sessions->findByIdempotencyKey($idempotencyKey, $this->idShop());
+            if ($prior && ($prior['agent_fingerprint'] ?? '') === $this->agentFingerprint) {
+                $secret = bin2hex(random_bytes(32));
+                $this->sessions->update($prior['session_uid'], $this->idShop(), [
+                    'session_secret_hash' => hash('sha256', $secret),
+                    'updated_at' => date('Y-m-d H:i:s'),
+                ]);
+                $prior = $this->sessions->findByUid($prior['session_uid'], $this->idShop());
+                $out = Formatter::checkoutSession($prior, $this->registry);
+                $out['session_secret'] = $secret;
+                return Response::json(200, $out);
+            }
+        }
+
         $lineItems = $body['line_items'] ?? null;
         if (!is_array($lineItems) || $lineItems === []) {
             return UcpError::response('missing_line_items', 'line_items array is required', 400);
@@ -293,6 +314,19 @@ final class CheckoutService
         }
         if (in_array($session['status'], ['canceled', 'completed'], true)) {
             return UcpError::response('session_' . $session['status'], 'Session is ' . $session['status'], 409);
+        }
+
+        // Guard (QA): only a fully-specified session may be completed. Reject if
+        // line items, buyer email, shipping address, or a required fulfillment
+        // selection are still missing — otherwise an agent could settle payment
+        // on an incomplete session (e.g. /complete immediately after create).
+        $missing = UcpStatus::missingRequirements($session);
+        if ($missing !== []) {
+            return UcpError::response(
+                'session_not_ready',
+                'Checkout session is not ready to complete; missing: ' . implode(', ', $missing),
+                422
+            );
         }
 
         $payment = $body['payment'] ?? null;
