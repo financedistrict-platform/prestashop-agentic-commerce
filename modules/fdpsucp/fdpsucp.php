@@ -24,7 +24,7 @@ class FdPsUcp extends Module
     {
         $this->name = 'fdpsucp';
         $this->tab = 'others';
-        $this->version = '0.5.0';
+        $this->version = '0.5.1';
         $this->author = 'Finance District';
         $this->need_instance = 0;
         $this->ps_versions_compliancy = ['min' => '1.7.0.0', 'max' => _PS_VERSION_];
@@ -47,7 +47,78 @@ class FdPsUcp extends Module
             && $this->installDb()
             && $this->ensureAgentToken()
             && $this->registerHook('actionUcpCollectPaymentHandlers')
-            && $this->registerHook('moduleRoutes');
+            && $this->registerHook('moduleRoutes')
+            && $this->installHtaccessRules();
+    }
+
+    /**
+     * Wire the two web-server rewrites the module needs so it works straight
+     * after install — no manual Apache/.htaccess editing:
+     *
+     *   /.well-known/ucp             → discovery front controller (spec-fixed path)
+     *   /module/fdpsucp/api/<path>   → api front controller (ucp_path=<path>)
+     *
+     * `.well-known/ucp` can't be a PrestaShop route, and the friendly
+     * `/module/...` path needs a rewrite when Friendly URLs are off (which the
+     * Back Office needs on the official image). Both live in a block written
+     * above PrestaShop's `# ~~start~~` marker — Tools::generateHtaccess()
+     * preserves that region, so the rules survive regeneration.
+     *
+     * Apache only: nginx has no per-directory .htaccess, so there this is a
+     * harmless no-op and the documented manual `location` rule stays the path.
+     * A write failure (e.g. read-only .htaccess) is logged, never fatal — the
+     * module is still reachable via the raw `index.php?fc=module&...` URLs.
+     *
+     * Public so the 0.5.1 upgrade script can re-run it on existing installs.
+     */
+    public function installHtaccessRules(): bool
+    {
+        $path = $this->htaccessPath();
+
+        // Friendly URLs off can mean there is no .htaccess yet — ask PrestaShop
+        // to create one so our block has a stable place to live.
+        if (!is_file($path) && method_exists('Tools', 'generateHtaccess')) {
+            @Tools::generateHtaccess();
+        }
+
+        $current = is_file($path) ? (string) @file_get_contents($path) : '';
+        $updated = \FD\PrismUcp\Support\HtaccessRules::apply($current);
+
+        if ($updated === $current) {
+            return true; // already wired
+        }
+
+        if (@file_put_contents($path, $updated) === false) {
+            \PrestaShopLogger::addLog(
+                '[FD UCP] Could not write ' . $path . ' — add the UCP rewrites manually (see README).',
+                2
+            );
+        }
+
+        return true;
+    }
+
+    /** Remove our rewrite block on uninstall (best effort). */
+    private function removeHtaccessRules(): bool
+    {
+        $path = $this->htaccessPath();
+        if (!is_file($path)) {
+            return true;
+        }
+
+        $current = (string) @file_get_contents($path);
+        $updated = \FD\PrismUcp\Support\HtaccessRules::remove($current);
+        if ($updated !== $current) {
+            @file_put_contents($path, $updated);
+        }
+
+        return true;
+    }
+
+    /** Absolute path to the store's root .htaccess. */
+    private function htaccessPath(): string
+    {
+        return rtrim(_PS_ROOT_DIR_, '/\\') . DIRECTORY_SEPARATOR . '.htaccess';
     }
 
     /**
@@ -109,6 +180,8 @@ class FdPsUcp extends Module
 
     public function uninstall(): bool
     {
+        $this->removeHtaccessRules();
+
         return $this->uninstallDb() && parent::uninstall();
     }
 
@@ -122,7 +195,8 @@ class FdPsUcp extends Module
      *
      * Requires Friendly URLs (PS_REWRITING_SETTINGS); when off, discovery falls
      * back to advertising the front-controller URL. The spec-fixed `.well-known/ucp`
-     * path is not a route namespace and stays a web-server rewrite (same as Woo).
+     * path is not a route namespace and stays a web-server rewrite (same as Woo) —
+     * on Apache the module writes that rewrite itself on install (installHtaccessRules).
      *
      * @param array<string,mixed> $params
      * @return array<string,array<string,mixed>>

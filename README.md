@@ -88,7 +88,7 @@ Three modules. Core works standalone; payment handlers are optional modules that
 
 - PrestaShop 1.7.8+ / 8.x / 9.x
 - PHP 8.1+
-- A web-server rewrite that maps the spec-fixed `/.well-known/ucp` path and `/module/fdpsucp/api/*` to the module's front controllers (an Apache `RewriteRule` / `Alias` or the nginx equivalent). Both work with **Friendly URLs off** — recommended on the official `prestashop:9.1` image, where Friendly URLs on make the Back Office generate admin links without `index.php` that 404. (A clean `/ucp/v1` route via `hookModuleRoutes` is available if you keep Friendly URLs on.)
+- **Apache** with `mod_rewrite` (the official `prestashop` image): no manual web-server config — `fdpsucp` writes the required rewrites into the store's `.htaccess` on install (see below). **nginx**: add the equivalent `location` rule by hand (see [below](#web-server-rewrites)). Both work with **Friendly URLs off** — recommended on the official `prestashop:9.1` image, where Friendly URLs on make the Back Office generate admin links without `index.php` that 404. (A clean `/ucp/v1` route via `hookModuleRoutes` is available if you keep Friendly URLs on.)
 - A [Prism](https://developers.fd.xyz) account (for real payments)
 
 ### As PrestaShop modules
@@ -107,7 +107,29 @@ php bin/console prestashop:module install fdpsdummy
 
 Install **fdpsucp** first, then the payment handlers — they register with the core via the `actionUcpCollectPaymentHandlers` hook. Run `bin/console` as the web-server user (e.g. `www-data`), not root, or the cache write will break the Back Office.
 
-The one path that needs a web-server rewrite is the spec-fixed `/.well-known/ucp`. Map it to the discovery front controller with an Apache `RewriteRule` (or an `Alias`) or the nginx `location` equivalent, so requests to `/.well-known/ucp` reach the `fdpsucp` module.
+#### Web-server rewrites
+
+Two paths must reach the module's front controllers: the spec-fixed `/.well-known/ucp` (discovery) and `/module/fdpsucp/api/*` (the shopping service).
+
+**Apache — automatic.** On install, `fdpsucp` writes these rules into the store's `.htaccess`, above PrestaShop's `# ~~start~~` marker (the region `Tools::generateHtaccess()` preserves), so they survive regeneration and are removed again on uninstall. Nothing to do by hand. If the web-server user can't write `.htaccess` (locked-down host), the module logs a warning and you add the rules manually — same as nginx below.
+
+**nginx — manual.** Add to your server block:
+
+```nginx
+location = /.well-known/ucp {
+    rewrite ^ /index.php?fc=module&module=fdpsucp&controller=discovery last;
+}
+location /module/fdpsucp/api/ {
+    rewrite ^/module/fdpsucp/api/(.*)$ /index.php?fc=module&module=fdpsucp&controller=api&ucp_path=$1 last;
+}
+```
+
+The equivalent Apache rules (for reference, or a read-only `.htaccess`):
+
+```apache
+RewriteRule ^\.well-known/ucp/?$ index.php?fc=module&module=fdpsucp&controller=discovery [QSA,L]
+RewriteRule ^module/fdpsucp/api(?:/(.*))?$ index.php?fc=module&module=fdpsucp&controller=api&ucp_path=$1 [QSA,L]
+```
 
 ## Configuration
 
