@@ -16,3 +16,4 @@ require_once $src . '/Http/Response.php';
 require_once $src . '/Ucp/UcpAddress.php';
 require_once $src . '/Ucp/UcpStatus.php';
 require_once $src . '/Ucp/UcpError.php';
+require_once $src . '/Support/HtaccessRules.php';
