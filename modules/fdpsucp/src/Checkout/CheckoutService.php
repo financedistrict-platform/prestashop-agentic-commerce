@@ -4,6 +4,7 @@ namespace FD\PrismUcp\Checkout;
 
 use FD\PrismUcp\Http\Response;
 use FD\PrismUcp\Payment\PaymentRegistry;
+use FD\PrismUcp\Ucp\CapabilitySecret;
 use FD\PrismUcp\Ucp\Formatter;
 use FD\PrismUcp\Ucp\SessionRepository;
 use FD\PrismUcp\Ucp\UcpError;
@@ -160,8 +161,8 @@ final class CheckoutService
         if (!$session) {
             return UcpError::response('checkout_not_found', 'Checkout session not found', 404);
         }
-        if (!$this->ownsSession($session)) {
-            return UcpError::response('session_ownership', 'Session belongs to a different agent', 403);
+        if ($authError = $this->sessionAuthError($session)) {
+            return $authError;
         }
         return Response::json(200, Formatter::checkoutSession($session, $this->registry));
     }
@@ -175,8 +176,8 @@ final class CheckoutService
         if (!$session) {
             return UcpError::response('checkout_not_found', 'Checkout session not found', 404);
         }
-        if (!$this->ownsSession($session)) {
-            return UcpError::response('session_ownership', 'Session belongs to a different agent', 403);
+        if ($authError = $this->sessionAuthError($session)) {
+            return $authError;
         }
         if (in_array($session['status'], ['canceled', 'completed', 'complete_in_progress'], true)) {
             return UcpError::response('session_' . $session['status'], 'Session is ' . $session['status'], 409);
@@ -273,8 +274,8 @@ final class CheckoutService
         if (!$session) {
             return UcpError::response('checkout_not_found', 'Checkout session not found', 404);
         }
-        if (!$this->ownsSession($session)) {
-            return UcpError::response('session_ownership', 'Session belongs to a different agent', 403);
+        if ($authError = $this->sessionAuthError($session)) {
+            return $authError;
         }
         if ($session['status'] === 'completed') {
             return UcpError::response('session_completed', 'Cannot cancel a completed session', 409);
@@ -309,8 +310,8 @@ final class CheckoutService
         if (!$session) {
             return UcpError::response('checkout_not_found', 'Checkout session not found', 404);
         }
-        if (!$this->ownsSession($session)) {
-            return UcpError::response('session_ownership', 'Session belongs to a different agent', 403);
+        if ($authError = $this->sessionAuthError($session)) {
+            return $authError;
         }
         if (in_array($session['status'], ['canceled', 'completed'], true)) {
             return UcpError::response('session_' . $session['status'], 'Session is ' . $session['status'], 409);
@@ -498,14 +499,33 @@ final class CheckoutService
      */
     private function ownsSession(array $session): bool
     {
+        return CapabilitySecret::authorizes((string) ($session['session_secret_hash'] ?? ''), $this->sessionSecret);
+    }
+
+    /**
+     * Authorization guard for an existing session: returns an error Response to
+     * send back, or null when the caller may proceed. Distinguishes "no secret
+     * supplied" — the common integration mistake, answered with an actionable
+     * message naming the header — from "wrong secret", a genuine ownership
+     * violation. Both are 403; the code/message is what tells them apart.
+     *
+     * @param array<string,mixed> $session
+     */
+    private function sessionAuthError(array $session): ?Response
+    {
         $storedHash = (string) ($session['session_secret_hash'] ?? '');
-        if ($storedHash === '') {
-            return true;
+        switch (CapabilitySecret::classify($storedHash, $this->sessionSecret)) {
+            case CapabilitySecret::MISSING:
+                return UcpError::response(
+                    'session_secret_required',
+                    'This checkout session requires its capability secret. Send the `session_secret` from the create response as the `UCP-Session-Secret` request header.',
+                    403
+                );
+            case CapabilitySecret::MISMATCH:
+                return UcpError::response('session_ownership', 'Session belongs to a different agent', 403);
+            default:
+                return null;
         }
-        if ($this->sessionSecret === '') {
-            return false;
-        }
-        return hash_equals($storedHash, hash('sha256', $this->sessionSecret));
     }
 
     /**

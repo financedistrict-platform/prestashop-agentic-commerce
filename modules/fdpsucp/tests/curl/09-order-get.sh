@@ -9,4 +9,6 @@ if [ -z "$ORDER_ID" ]; then
 fi
 
 echo "=== Get Order $ORDER_ID ==="
-curl -s "${AUTH[@]}" "$UCP_API/orders/$ORDER_ID" | "$PY" -m json.tool
+# The order read requires the originating session's secret (export UCP_SECRET);
+# without it the module returns 404 to avoid confirming the order exists.
+curl -s "${AUTH[@]}" "${SECRET_HEADER[@]}" "$UCP_API/orders/$ORDER_ID" | "$PY" -m json.tool
