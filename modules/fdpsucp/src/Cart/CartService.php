@@ -5,6 +5,7 @@ namespace FD\PrismUcp\Cart;
 use FD\PrismUcp\Checkout\CheckoutService;
 use FD\PrismUcp\Http\Response;
 use FD\PrismUcp\Payment\PaymentRegistry;
+use FD\PrismUcp\Ucp\CapabilitySecret;
 use FD\PrismUcp\Ucp\Formatter;
 use FD\PrismUcp\Ucp\UcpError;
 
@@ -83,8 +84,8 @@ final class CartService
         if (!$cart) {
             return UcpError::response('cart_not_found', 'Cart not found', 404);
         }
-        if (!$this->ownsCart($cart)) {
-            return UcpError::response('cart_ownership', 'Cart belongs to a different agent', 403);
+        if ($authError = $this->cartAuthError($cart)) {
+            return $authError;
         }
 
         return Response::json(200, $this->formatCart($cart));
@@ -99,8 +100,8 @@ final class CartService
         if (!$cart) {
             return UcpError::response('cart_not_found', 'Cart not found', 404);
         }
-        if (!$this->ownsCart($cart)) {
-            return UcpError::response('cart_ownership', 'Cart belongs to a different agent', 403);
+        if ($authError = $this->cartAuthError($cart)) {
+            return $authError;
         }
 
         $lineItems = $body['line_items'] ?? null;
@@ -130,8 +131,8 @@ final class CartService
         if (!$cart) {
             return UcpError::response('cart_not_found', 'Cart not found', 404);
         }
-        if (!$this->ownsCart($cart)) {
-            return UcpError::response('cart_ownership', 'Cart belongs to a different agent', 403);
+        if ($authError = $this->cartAuthError($cart)) {
+            return $authError;
         }
 
         $this->carts->delete($uid, $this->idShop());
@@ -164,8 +165,8 @@ final class CartService
         if (!$cart) {
             return UcpError::response('cart_not_found', 'Cart not found', 404);
         }
-        if (!$this->ownsCart($cart)) {
-            return UcpError::response('cart_ownership', 'Cart belongs to a different agent', 403);
+        if ($authError = $this->cartAuthError($cart)) {
+            return $authError;
         }
 
         $stored = json_decode($cart['line_items'] ?? '[]', true) ?: [];
@@ -297,23 +298,29 @@ final class CartService
     }
 
     /**
-     * Ownership is proven by the capability secret minted at cart creation
-     * (sent as `UCP-Session-Secret`), not the spoofable agent fingerprint.
-     * Carts created before 0.5.0 have no stored hash and remain accessible.
+     * Authorization guard for an existing cart: returns an error Response to send
+     * back, or null when the caller may proceed. Distinguishes "no secret
+     * supplied" — answered with an actionable message naming the header — from
+     * "wrong secret". Both are 403; the code/message tells them apart. The secret
+     * may arrive as `UCP-Cart-Secret` or `UCP-Session-Secret` (see Router).
      *
      * @param array<string,mixed> $cart
      */
-    private function ownsCart(array $cart): bool
+    private function cartAuthError(array $cart): ?Response
     {
         $storedHash = (string) ($cart['cart_secret_hash'] ?? '');
-        if ($storedHash === '') {
-            return true;
+        switch (CapabilitySecret::classify($storedHash, $this->sessionSecret)) {
+            case CapabilitySecret::MISSING:
+                return UcpError::response(
+                    'cart_secret_required',
+                    'This cart requires its capability secret. Send the `cart_secret` from the create response as the `UCP-Cart-Secret` (or `UCP-Session-Secret`) request header.',
+                    403
+                );
+            case CapabilitySecret::MISMATCH:
+                return UcpError::response('cart_ownership', 'Cart belongs to a different agent', 403);
+            default:
+                return null;
         }
-        if ($this->sessionSecret === '') {
-            return false;
-        }
-
-        return hash_equals($storedHash, hash('sha256', $this->sessionSecret));
     }
 
     private static function uuid(): string

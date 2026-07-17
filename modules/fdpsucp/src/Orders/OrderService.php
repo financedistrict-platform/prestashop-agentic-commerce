@@ -3,6 +3,7 @@
 namespace FD\PrismUcp\Orders;
 
 use FD\PrismUcp\Http\Response;
+use FD\PrismUcp\Ucp\CapabilitySecret;
 use FD\PrismUcp\Ucp\Formatter;
 use FD\PrismUcp\Ucp\UcpError;
 
@@ -34,13 +35,12 @@ final class OrderService
         }
 
         // Only the agent that owns the originating session (capability-secret
-        // holder) may read the order. A generic 404 avoids confirming existence.
+        // holder) may read the order. A generic 404 avoids confirming existence
+        // to a non-owner — so both a missing and a wrong secret map to 404 here,
+        // unlike the cart/session endpoints which distinguish the two.
         $storedHash = (string) ($row['session_secret_hash'] ?? '');
-        if ($storedHash !== '') {
-            if ($this->sessionSecret === ''
-                || !hash_equals($storedHash, hash('sha256', $this->sessionSecret))) {
-                return UcpError::response('order_not_found', 'Order not found', 404);
-            }
+        if (!CapabilitySecret::authorizes($storedHash, $this->sessionSecret)) {
+            return UcpError::response('order_not_found', 'Order not found', 404);
         }
 
         $order = new \Order($idOrder);

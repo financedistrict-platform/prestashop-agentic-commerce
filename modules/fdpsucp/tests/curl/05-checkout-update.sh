@@ -8,7 +8,7 @@ if [ -z "${SESSION_ID:-}" ]; then
 fi
 
 echo "=== Update Checkout Session $SESSION_ID (buyer + shipping address) ==="
-curl -s "${AUTH[@]}" -X PUT "$UCP_API/checkout-sessions/$SESSION_ID" \
+curl -s "${AUTH[@]}" "${SECRET_HEADER[@]}" -X PUT "$UCP_API/checkout-sessions/$SESSION_ID" \
   -H "Content-Type: application/json" \
   -d '{
     "buyer": {

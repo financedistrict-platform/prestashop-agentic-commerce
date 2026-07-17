@@ -13,7 +13,7 @@ if [ -z "${SESSION_ID:-}" ]; then
 fi
 
 echo "=== Complete Checkout Session $SESSION_ID (handler: $HANDLER_ID) ==="
-curl -s "${AUTH[@]}" -X POST "$UCP_API/checkout-sessions/$SESSION_ID/complete" \
+curl -s "${AUTH[@]}" "${SECRET_HEADER[@]}" -X POST "$UCP_API/checkout-sessions/$SESSION_ID/complete" \
   -H "Content-Type: application/json" \
   -d "{
     \"payment\": {

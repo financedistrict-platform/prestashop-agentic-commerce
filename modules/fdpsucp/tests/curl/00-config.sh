@@ -17,6 +17,16 @@ if [ -n "${UCP_TOKEN:-}" ]; then
   AUTH=(-H "Authorization: Bearer $UCP_TOKEN")
 fi
 
+# Per-resource capability secret. Creating a cart or checkout session returns a
+# one-time secret in the response body (cart_secret / session_secret). Export it
+# — the create scripts print the exact command — so every later call to that
+# resource authorizes. Sent here as UCP-Session-Secret, which the module accepts
+# for both carts and sessions (UCP-Cart-Secret is an accepted alias for carts).
+SECRET_HEADER=()
+if [ -n "${UCP_SECRET:-}" ]; then
+  SECRET_HEADER=(-H "UCP-Session-Secret: $UCP_SECRET")
+fi
+
 # Pick a working Python (used for JSON parsing). On Windows/Git Bash the bare
 # `python3` name is often a Store shim that fails, while `python` works.
 if [ -z "${PY:-}" ]; then
