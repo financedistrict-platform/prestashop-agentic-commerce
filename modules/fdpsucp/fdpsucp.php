@@ -24,7 +24,7 @@ class FdPsUcp extends Module
     {
         $this->name = 'fdpsucp';
         $this->tab = 'others';
-        $this->version = '0.5.2';
+        $this->version = '0.5.3';
         $this->author = 'Finance District';
         $this->need_instance = 0;
         $this->ps_versions_compliancy = ['min' => '1.7.0.0', 'max' => _PS_VERSION_];
