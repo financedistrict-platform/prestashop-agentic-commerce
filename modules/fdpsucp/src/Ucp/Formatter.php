@@ -50,42 +50,24 @@ final class Formatter
                 ],
                 // Capability namespaces are singular (spec) even though the REST
                 // resource paths are plural (e.g. dev.ucp.shopping.order vs GET /orders/{id}).
+                // Per-capability spec/schema URLs are omitted: the equivalent
+                // ucp.dev pages 404, and the reference implementations (Saleor,
+                // Medusa) declare only version (+ extends) per capability. The
+                // valid spec/schema URLs live at the service level above.
                 'capabilities' => [
-                    'dev.ucp.shopping.catalog.search' => [[
-                        'version' => $v,
-                        'spec' => $base . '/specification/catalog/search',
-                        'schema' => $base . '/schemas/shopping/catalog_search.json',
-                    ]],
-                    'dev.ucp.shopping.catalog.lookup' => [[
-                        'version' => $v,
-                        'spec' => $base . '/specification/catalog/lookup',
-                        'schema' => $base . '/schemas/shopping/catalog_lookup.json',
-                    ]],
-                    'dev.ucp.shopping.cart' => [[
-                        'version' => $v,
-                        'spec' => $base . '/specification/cart',
-                        'schema' => $base . '/schemas/shopping/cart.json',
-                    ]],
-                    'dev.ucp.shopping.checkout' => [[
-                        'version' => $v,
-                        'spec' => $base . '/specification/checkout',
-                        'schema' => $base . '/schemas/shopping/checkout.json',
-                    ]],
+                    'dev.ucp.shopping.catalog.search' => [['version' => $v]],
+                    'dev.ucp.shopping.catalog.lookup' => [['version' => $v]],
+                    'dev.ucp.shopping.cart' => [['version' => $v]],
+                    'dev.ucp.shopping.checkout' => [['version' => $v]],
                     'dev.ucp.shopping.fulfillment' => [[
                         'version' => $v,
-                        'spec' => $base . '/specification/fulfillment',
-                        'schema' => $base . '/schemas/shopping/fulfillment.json',
                         'extends' => [
                             'dev.ucp.shopping.checkout',
                             'dev.ucp.shopping.catalog.search',
                             'dev.ucp.shopping.catalog.lookup',
                         ],
                     ]],
-                    'dev.ucp.shopping.order' => [[
-                        'version' => $v,
-                        'spec' => $base . '/specification/order',
-                        'schema' => $base . '/schemas/shopping/order.json',
-                    ]],
+                    'dev.ucp.shopping.order' => [['version' => $v]],
                 ],
                 'payment_handlers' => $registry->getUcpDiscoveryHandlers() ?: (object) [],
             ],
