@@ -58,7 +58,7 @@ final class PrismHandler implements PaymentHandlerInterface
         }
 
         // The Prism handler is an external component with its own version and docs:
-        // spec/config_schema are served by the resolved gateway, not ucp.dev.
+        // spec/schema are served by the resolved gateway, not ucp.dev.
         $gateway = ConfigResolver::apiUrl();
 
         return [
@@ -67,7 +67,7 @@ final class PrismHandler implements PaymentHandlerInterface
                 'name' => $this->name(),
                 'version' => self::HANDLER_VERSION,
                 'spec' => $gateway . '/ucp/prism.md',
-                'config_schema' => $gateway . '/ucp/schema.json',
+                'schema' => $gateway . '/ucp/schema.json',
                 'instrument_schemas' => [],
                 'config' => [
                     'tokenization' => false,

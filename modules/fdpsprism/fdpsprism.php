@@ -24,7 +24,7 @@ class FdPsPrism extends PaymentModule
     {
         $this->name = 'fdpsprism';
         $this->tab = 'payments_gateways';
-        $this->version = '0.1.0';
+        $this->version = '0.1.1';
         $this->author = 'Finance District';
         $this->need_instance = 0;
         $this->ps_versions_compliancy = ['min' => '1.7.0.0', 'max' => _PS_VERSION_];
