@@ -19,7 +19,7 @@ if (!defined('_PS_VERSION_')) {
  */
 final class Formatter
 {
-    public const UCP_VERSION = '2026-04-08';
+    public const UCP_VERSION = '2026-08-25';
 
     public static function toMinor(float $amount): int
     {
@@ -90,7 +90,6 @@ final class Formatter
                 'payment_handlers' => $registry->getUcpDiscoveryHandlers() ?: (object) [],
             ],
             'name' => $storeName,
-            'signing_keys' => [],
         ];
     }
 

@@ -47,7 +47,7 @@ bash 01-discovery.sh
 bash 02-catalog-search.sh
 bash 04-checkout-create.sh 19            # product id 19
 SESSION_ID=<id> bash 05-checkout-update.sh
-SESSION_ID=<id> bash 07-checkout-complete.sh   # HANDLER_ID=dummy, credential {}
+SESSION_ID=<id> HANDLER_ID=dummy INSTRUMENT_TYPE=dummy CREDENTIAL='{"type":"dummy"}' bash 07-checkout-complete.sh
 bash 09-order-get.sh <order_id>
 bash 19-cart-create.sh 19
 CART_ID=<id> bash 22-cart-checkout.sh

@@ -92,7 +92,7 @@ else
     [ "$GST" = "200" ] && pass "session GET 200" || fail "session GET" "status $GST"
 
     COMP=$(curl -s "${AUTH[@]}" -X POST "$UCP_API/checkout-sessions/$SID/complete" -H 'Content-Type: application/json' \
-      -d '{"payment":{"instruments":[{"handler_id":"dummy","credential":{}}]}}')
+      -d '{"payment":{"instruments":[{"id":"inst_1","handler_id":"dummy","type":"dummy","credential":{"type":"dummy"}}]}}')
     CST=$(jval "$COMP" "d['status']")
     OID=$(jval "$COMP" "d.get('order',{}).get('id','')")
     [ "$CST" = "completed" ] && pass "complete -> status completed" || fail "complete" "status '$CST': $COMP"

@@ -122,7 +122,7 @@ def main() -> int:
     # 4. Order -> order.json  (complete on the dummy handler first)
     print("\n4. Order")
     _, completed = http_json("POST", f"{UCP_API}/checkout-sessions/{sid}/complete",
-                             {"payment": {"instruments": [{"handler_id": "dummy", "credential": {}}]}})
+                             {"payment": {"instruments": [{"id": "inst_1", "handler_id": "dummy", "type": "dummy", "credential": {"type": "dummy"}}]}})
     order_id = (completed.get("order") or {}).get("id")
     if order_id:
         _, order = http_json("GET", f"{UCP_API}/orders/{order_id}")

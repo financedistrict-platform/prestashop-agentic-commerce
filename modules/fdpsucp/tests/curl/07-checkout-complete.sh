@@ -2,13 +2,12 @@
 set -euo pipefail
 . "$(dirname "$0")/00-config.sh"
 
-# Defaults to the dummy handler (always succeeds, no gateway). For a real Prism
-# settlement, set HANDLER_ID=x402 and pass a signed x402 credential in CREDENTIAL.
-HANDLER_ID="${HANDLER_ID:-dummy}"
-CREDENTIAL="${CREDENTIAL:-{\}}"
+HANDLER_ID="${HANDLER_ID:-xyz.fd.prism_payment}"
+INSTRUMENT_TYPE="${INSTRUMENT_TYPE:-x402}"
+CREDENTIAL="${CREDENTIAL:-{\"type\":\"x402\"\}}"
 
 if [ -z "${SESSION_ID:-}" ]; then
-  echo "Usage: SESSION_ID=<id> [HANDLER_ID=dummy] [CREDENTIAL='<json>'] $0"
+  echo "Usage: SESSION_ID=<id> [HANDLER_ID=xyz.fd.prism_payment] [INSTRUMENT_TYPE=x402] [CREDENTIAL='<json>'] $0"
   exit 1
 fi
 
@@ -18,7 +17,9 @@ curl -s "${AUTH[@]}" "${SECRET_HEADER[@]}" -X POST "$UCP_API/checkout-sessions/$
   -d "{
     \"payment\": {
       \"instruments\": [{
+        \"id\": \"inst_1\",
         \"handler_id\": \"$HANDLER_ID\",
+        \"type\": \"$INSTRUMENT_TYPE\",
         \"credential\": $CREDENTIAL
       }]
     }

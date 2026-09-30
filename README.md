@@ -12,7 +12,7 @@
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="License: MIT"></a>
   <a href="#"><img src="https://img.shields.io/badge/PHP-8.1+-8892BF.svg" alt="PHP 8.1+"></a>
   <a href="#"><img src="https://img.shields.io/badge/PrestaShop-1.7.8%20|%208.x%20|%209.x-DF0067.svg" alt="PrestaShop 1.7.8+ / 8.x / 9.x"></a>
-  <a href="https://ucp.dev"><img src="https://img.shields.io/badge/UCP-v2026--04--08-green.svg" alt="UCP v2026-04-08"></a>
+  <a href="https://ucp.dev"><img src="https://img.shields.io/badge/UCP-v2026--08--25-green.svg" alt="UCP v2026-08-25"></a>
 </p>
 
 ---
@@ -252,7 +252,7 @@ Your handler implements `FD\PrismUcp\Payment\PaymentHandlerInterface`:
 ```php
 interface PaymentHandlerInterface
 {
-    public function id(): string;                                       // e.g. "x402"
+    public function id(): string;                                       // e.g. "xyz.fd.prism_payment"
     public function name(): string;                                     // e.g. "Prism (x402 Stablecoin)"
     public function getUcpDiscoveryHandlers(): array;                   // advertised in /.well-known/ucp
     public function prepareCheckoutPayment(array $input): ?array;       // called when a session is created

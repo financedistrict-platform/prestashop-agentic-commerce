@@ -20,21 +20,17 @@ final class PrismHandler implements PaymentHandlerInterface
 {
     public const NS = 'xyz.fd.prism_payment';
 
-    /**
-     * Prism's own x402 handler version — independent of the UCP protocol version
-     * advertised in the profile. Tracks Prism's handler, bumped per release.
-     */
-    private const HANDLER_VERSION = '2026-01-15';
+    private const HANDLER_VERSION = '2026-10-07';
+
+    private const INSTRUMENT_TYPE = 'x402';
 
     public function __construct(private \PaymentModule $module)
     {
     }
 
-    // Must match the entry id Prism returns in the checkout config (and thus the
-    // handler_id the agent submits at /complete) so CheckoutService can resolve it.
     public function id(): string
     {
-        return 'x402';
+        return self::NS;
     }
 
     public function name(): string
@@ -63,16 +59,12 @@ final class PrismHandler implements PaymentHandlerInterface
 
         return [
             self::NS => [[
-                'id' => $this->id(),
-                'name' => $this->name(),
+                'id' => self::NS,
                 'version' => self::HANDLER_VERSION,
                 'spec' => $gateway . '/ucp/prism.md',
                 'schema' => $gateway . '/ucp/schema.json',
-                'instrument_schemas' => [],
-                'config' => [
-                    'tokenization' => false,
-                    'description' => 'Pay with stablecoins via an AI agent wallet (x402). Settled on-chain by Prism.',
-                ],
+                'available_instruments' => [['type' => self::INSTRUMENT_TYPE]],
+                'config' => (object) [],
             ]],
         ];
     }
@@ -128,7 +120,7 @@ final class PrismHandler implements PaymentHandlerInterface
     /**
      * Guard the credential, settle on-chain, then place the paid order.
      *
-     * @param array{session:array,cart:\Cart,handler_id:string,credential:mixed,checkout_meta:?array} $input
+     * @param array{session:array,cart:\Cart,handler_id:string,instrument_type:string,credential:mixed,checkout_meta:?array} $input
      * @return array<string,mixed>
      */
     public function settlePayment(array $input): array
@@ -140,6 +132,9 @@ final class PrismHandler implements PaymentHandlerInterface
         $authorization = $this->decodeCredential($input['credential'] ?? null);
         if ($authorization === null) {
             return ['success' => false, 'error' => 'Invalid x402 credential format'];
+        }
+        if (!$this->hasX402Types($input['instrument_type'] ?? null, $input['credential'], $authorization)) {
+            return ['success' => false, 'error' => 'Prism instrument and credential type must be "x402"'];
         }
 
         // Binding guard (NFR-1): the signed credential must match our quote.
@@ -238,6 +233,13 @@ final class PrismHandler implements PaymentHandlerInterface
             'transaction_reference' => $txRef,
             'network' => $network,
         ];
+    }
+
+    private function hasX402Types(mixed $instrumentType, mixed $credential, array $decoded): bool
+    {
+        $credentialType = is_array($credential) ? ($credential['type'] ?? null) : ($decoded['type'] ?? null);
+
+        return $instrumentType === self::INSTRUMENT_TYPE && $credentialType === self::INSTRUMENT_TYPE;
     }
 
     /**

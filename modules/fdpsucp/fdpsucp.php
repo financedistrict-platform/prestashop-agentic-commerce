@@ -18,13 +18,13 @@ require_once __DIR__ . '/src/autoload.php';
 
 class FdPsUcp extends Module
 {
-    public const UCP_VERSION = '2026-04-08';
+    public const UCP_VERSION = '2026-08-25';
 
     public function __construct()
     {
         $this->name = 'fdpsucp';
         $this->tab = 'others';
-        $this->version = '0.5.3';
+        $this->version = '0.6.0';
         $this->author = 'Finance District';
         $this->need_instance = 0;
         $this->ps_versions_compliancy = ['min' => '1.7.0.0', 'max' => _PS_VERSION_];

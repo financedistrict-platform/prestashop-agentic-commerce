@@ -332,8 +332,16 @@ final class CheckoutService
 
         $payment = $body['payment'] ?? null;
         $instrument = $payment['instruments'][0] ?? null;
-        if (!is_array($instrument) || empty($instrument['handler_id']) || !isset($instrument['credential'])) {
-            return UcpError::response('invalid_instrument', 'payment.instruments[0].handler_id and credential are required', 400);
+        if (!is_array($instrument)
+            || empty($instrument['id'])
+            || empty($instrument['handler_id'])
+            || empty($instrument['type'])
+            || !isset($instrument['credential'])
+        ) {
+            return UcpError::response('invalid_instrument', 'payment.instruments[0].id, handler_id, type and credential are required', 400);
+        }
+        if (is_array($instrument['credential']) && empty($instrument['credential']['type'])) {
+            return UcpError::response('invalid_instrument', 'payment.instruments[0].credential.type is required', 400);
         }
         $handlerId = (string) $instrument['handler_id'];
         if (!$this->registry->get($handlerId)) {
@@ -357,6 +365,7 @@ final class CheckoutService
             'session' => $session,
             'cart' => $cart,
             'handler_id' => $handlerId,
+            'instrument_type' => (string) $instrument['type'],
             'credential' => $instrument['credential'],
             'checkout_meta' => json_decode($session['payment_meta'] ?? 'null', true),
         ]);
