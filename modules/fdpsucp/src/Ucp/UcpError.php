@@ -13,7 +13,7 @@ if (!defined('_PS_VERSION_')) {
  */
 final class UcpError
 {
-    public const VERSION = '2026-04-08';
+    public const VERSION = '2026-08-25';
 
     public static function response(string $code, string $message, int $httpStatus = 400): Response
     {

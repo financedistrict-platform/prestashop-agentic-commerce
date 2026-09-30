@@ -20,7 +20,7 @@ final class UcpErrorTest extends TestCase
 
         $body = $response->body;
         $this->assertSame('error', $body['ucp']['status']);
-        $this->assertSame('2026-04-08', $body['ucp']['version']);
+        $this->assertSame('2026-08-25', $body['ucp']['version']);
         $this->assertSame('test_code', $body['messages'][0]['code']);
         $this->assertSame('Something went wrong', $body['messages'][0]['content']);
         $this->assertSame('fatal', $body['messages'][0]['severity']);

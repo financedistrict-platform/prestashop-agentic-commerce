@@ -13,7 +13,7 @@ if (!defined('_PS_VERSION_')) {
  */
 interface PaymentHandlerInterface
 {
-    /** Stable handler id, e.g. "x402" or "dummy". */
+    /** Stable handler id, e.g. "xyz.fd.prism_payment" or "dummy". */
     public function id(): string;
 
     /** Human-readable name. */
@@ -21,7 +21,7 @@ interface PaymentHandlerInterface
 
     /**
      * Entries for the /.well-known/ucp `payment_handlers` block.
-     * Shape: [ '<handler_namespace>' => [ { id, name, version, spec, config, ... } ] ]
+     * Shape: [ '<handler_namespace>' => [ { id, version, spec, schema, available_instruments, config } ] ]
      *
      * @return array<string,array<int,array<string,mixed>>>
      */
@@ -46,7 +46,7 @@ interface PaymentHandlerInterface
      *   'error' => ?string,
      * ]
      *
-     * @param array{session:array,cart:\Cart,handler_id:string,credential:mixed,checkout_meta:?array} $input
+     * @param array{session:array,cart:\Cart,handler_id:string,instrument_type:string,credential:mixed,checkout_meta:?array} $input
      * @return array<string,mixed>
      */
     public function settlePayment(array $input): array;
