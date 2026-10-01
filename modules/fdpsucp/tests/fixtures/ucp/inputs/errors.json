@@ -1,0 +1,3 @@
+{
+  "invalid_instrument": {"message": "payment.instruments[0].handler_id and credential are required", "status": 400}
+}

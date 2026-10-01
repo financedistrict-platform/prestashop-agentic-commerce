@@ -1,0 +1,19 @@
+{
+  "id_prism_session": "12",
+  "session_uid": "5f0c2a8e-3b1d-4c6e-9a7f-2d4b8e1c0a91",
+  "id_shop": "1",
+  "status": "completed",
+  "currency": "EUR",
+  "line_items": "[{\"id\":\"li_1\",\"item\":{\"id\":\"101\",\"title\":\"Organic Coffee Beans 1kg\",\"price\":1800},\"quantity\":2,\"totals\":[{\"type\":\"subtotal\",\"amount\":3600},{\"type\":\"total\",\"amount\":3600}]},{\"id\":\"li_2\",\"item\":{\"id\":\"205\",\"title\":\"Ceramic Pour-Over Dripper\",\"price\":600},\"quantity\":1,\"totals\":[{\"type\":\"subtotal\",\"amount\":600},{\"type\":\"total\",\"amount\":600}]}]",
+  "totals": "[{\"type\":\"subtotal\",\"amount\":4200},{\"type\":\"fulfillment\",\"amount\":495},{\"type\":\"total\",\"amount\":4695}]",
+  "buyer": "{\"email\":\"anna.schmidt@example.com\",\"first_name\":\"Anna\",\"last_name\":\"Schmidt\"}",
+  "fulfillment": "{\"methods\":[{\"id\":\"shipping_1\",\"type\":\"shipping\",\"line_item_ids\":[\"li_1\",\"li_2\"],\"selected_destination_id\":\"dest_1\",\"destinations\":[{\"street_address\":\"Hauptstrasse 12\",\"address_locality\":\"Berlin\",\"address_region\":\"BE\",\"postal_code\":\"10115\",\"address_country\":\"DE\",\"id\":\"dest_1\"}],\"groups\":[{\"id\":\"package_1\",\"line_item_ids\":[\"li_1\",\"li_2\"],\"selected_option_id\":\"7\",\"options\":[{\"id\":\"7\",\"title\":\"DHL Standard\",\"totals\":[{\"type\":\"total\",\"amount\":495}]}]}]}]}",
+  "payment_meta": "{\"transaction_reference\":\"0xabababababababababababababababababababababababababababababababab\",\"network\":\"eip155:84532\"}",
+  "id_order": "1001",
+  "agent_fingerprint": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "session_secret_hash": "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
+  "idempotency_key": null,
+  "created_at": "2026-04-20 10:00:00",
+  "updated_at": "2026-04-20 10:07:00",
+  "expires_at": "2026-04-20 16:00:00"
+}
