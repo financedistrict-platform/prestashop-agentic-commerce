@@ -7,7 +7,9 @@ use FD\PrismUcp\Http\Response;
 use FD\PrismUcp\Payment\PaymentRegistry;
 use FD\PrismUcp\Ucp\CapabilitySecret;
 use FD\PrismUcp\Ucp\Formatter;
+use FD\PrismUcp\Ucp\RequestContext;
 use FD\PrismUcp\Ucp\UcpError;
+use FD\PrismUcp\Ucp\VersionPin;
 
 if (!defined('_PS_VERSION_')) {
     exit;
@@ -29,7 +31,8 @@ final class CartService
         private PaymentRegistry $registry,
         private string $endpointBase,
         private string $agentFingerprint,
-        private string $sessionSecret = ''
+        private string $sessionSecret = '',
+        private ?VersionPin $pin = null
     ) {
         $this->carts = new CartRepository();
     }
@@ -63,6 +66,7 @@ final class CartService
             'line_items' => json_encode($formatted),
             'agent_fingerprint' => $this->agentFingerprint,
             'cart_secret_hash' => hash('sha256', $secret),
+            'ucp_version' => RequestContext::current()->sessionPin(),
             'created_at' => $now,
             'updated_at' => $now,
         ]);
@@ -84,6 +88,9 @@ final class CartService
         if (!$cart) {
             return UcpError::response('cart_not_found', 'Cart not found', 404);
         }
+        if ($pinError = $this->pin?->check($cart['ucp_version'] ?? null)) {
+            return $pinError;
+        }
         if ($authError = $this->cartAuthError($cart)) {
             return $authError;
         }
@@ -99,6 +106,9 @@ final class CartService
         $cart = $this->carts->findByUid($uid, $this->idShop());
         if (!$cart) {
             return UcpError::response('cart_not_found', 'Cart not found', 404);
+        }
+        if ($pinError = $this->pin?->check($cart['ucp_version'] ?? null)) {
+            return $pinError;
         }
         if ($authError = $this->cartAuthError($cart)) {
             return $authError;
@@ -131,6 +141,9 @@ final class CartService
         if (!$cart) {
             return UcpError::response('cart_not_found', 'Cart not found', 404);
         }
+        if ($pinError = $this->pin?->check($cart['ucp_version'] ?? null)) {
+            return $pinError;
+        }
         if ($authError = $this->cartAuthError($cart)) {
             return $authError;
         }
@@ -138,13 +151,7 @@ final class CartService
         $this->carts->delete($uid, $this->idShop());
 
         return Response::json(200, [
-            'ucp' => [
-                'version' => Formatter::UCP_VERSION,
-                'status' => 'success',
-                'capabilities' => [
-                    'dev.ucp.shopping.cart' => [['version' => Formatter::UCP_VERSION]],
-                ],
-            ],
+            'ucp' => RequestContext::current()->wire()->envelope(['cart']),
             'id' => $uid,
             'deleted' => true,
             'messages' => [],
@@ -164,6 +171,9 @@ final class CartService
         $cart = $this->carts->findByUid($uid, $this->idShop());
         if (!$cart) {
             return UcpError::response('cart_not_found', 'Cart not found', 404);
+        }
+        if ($pinError = $this->pin?->check($cart['ucp_version'] ?? null)) {
+            return $pinError;
         }
         if ($authError = $this->cartAuthError($cart)) {
             return $authError;
@@ -191,7 +201,9 @@ final class CartService
             $this->context,
             $this->registry,
             $this->endpointBase,
-            $this->agentFingerprint
+            $this->agentFingerprint,
+            '',
+            $this->pin
         );
         $response = $checkout->create(['line_items' => $sessionLineItems], $idempotencyKey);
 
@@ -279,13 +291,7 @@ final class CartService
         }
 
         return [
-            'ucp' => [
-                'version' => Formatter::UCP_VERSION,
-                'status' => 'success',
-                'capabilities' => [
-                    'dev.ucp.shopping.cart' => [['version' => Formatter::UCP_VERSION]],
-                ],
-            ],
+            'ucp' => RequestContext::current()->wire()->envelope(['cart']),
             'id' => $cart['cart_uid'],
             'currency' => $this->context->currency->iso_code,
             'line_items' => $lineItems,

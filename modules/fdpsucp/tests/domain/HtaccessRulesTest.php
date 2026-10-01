@@ -87,4 +87,24 @@ final class HtaccessRulesTest extends TestCase
             HtaccessRules::remove(HtaccessRules::apply(self::PS_HTACCESS))
         );
     }
+
+    public function test_block_routes_leaf_profiles_to_discovery_with_the_version(): void
+    {
+        $this->assertStringContainsString(
+            'RewriteRule ^\.well-known/ucp/(\d{4}-\d{2}-\d{2})/?$ index.php?fc=module&module=fdpsucp&controller=discovery&ucp_version=$1 [QSA,L]',
+            HtaccessRules::block()
+        );
+    }
+
+    public function test_apply_replaces_a_block_written_by_an_earlier_release(): void
+    {
+        $earlier = implode("\n", array_filter(
+            explode("\n", HtaccessRules::block()),
+            static fn (string $line): bool => strpos($line, 'ucp_version') === false
+        ));
+        $installed = HtaccessRules::apply(str_replace(HtaccessRules::block(), $earlier, HtaccessRules::apply(self::PS_HTACCESS)));
+
+        $this->assertSame(HtaccessRules::apply(self::PS_HTACCESS), $installed);
+        $this->assertSame(1, substr_count($installed, HtaccessRules::MARKER . ' start'));
+    }
 }

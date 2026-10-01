@@ -10,7 +10,7 @@ if (!defined('_PS_VERSION_')) {
  * Data access for the canonical `ps_prism_session` table. Every query is
  * scoped to a shop id (multistore isolation, FR-15).
  */
-final class SessionRepository
+class SessionRepository
 {
     private string $table;
 

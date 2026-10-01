@@ -70,20 +70,35 @@ docker exec -u www-data -w /var/www/html fd-prestashop-demo-prestashop-1 \
 
 ## Schema conformance (validates against the UCP spec repo)
 
-Validates live responses against the canonical JSON Schemas in
-`tools/ucp/source/schemas` (draft 2020-12). This is the automated form of
-Definition-of-Done item 5. Runs from the host:
+Validates responses against the JSON Schemas of each UCP spec tag (draft
+2020-12). Clone the tags once, outside the repo:
 
 ```bash
-# one-time: a draft-2020-12 validator
-python -m pip install jsonschema     # (python -m ensurepip --upgrade first if pip is missing)
-
-BASE_URL=http://localhost:8080 python tests/conformance/schema_conformance.py
+for t in v2026-01-23 v2026-04-08 v2026-08-25; do
+  [ -d "$UCP_SPEC/$t" ] || git clone --depth 1 --branch $t https://github.com/Universal-Commerce-Protocol/ucp.git "$UCP_SPEC/$t"
+done
 ```
 
-Checks: `/.well-known/ucp` → `profile.json`, catalog search → `catalog_search.json#/$defs/search_response`,
-checkout session → `checkout.json`, order → `order.json`. Override the schema
-location with `SCHEMA_DIR=…` if the spec repo lives elsewhere.
+Offline mode validates every fixture in a folder. The file name before `__`
+picks the `schema-map.json` entry (`ref` = schema `$id` plus optional JSON
+pointer, `instance_pointer` = part of the fixture, `each` = validate every
+array element). `known_deviations` lists the exact (path, keyword) misses the
+2026-04-08 fixtures keep to stay byte-equal with module 0.5.3; a new miss or a
+vanished one fails the run.
+
+```bash
+V=2026-04-08
+uv run --with jsonschema --with referencing python tests/conformance/schema_conformance.py \
+  --ucp-version $V --schema-dir "$UCP_SPEC/v$V/source/schemas" \
+  --schema-map tests/conformance/schema-map.json --fixtures tests/fixtures/ucp/$V
+```
+
+Live mode (no `--fixtures`) checks a running store: `--base-url` / `--ucp-api`
+(or `BASE_URL` / `UCP_API`). The last line is `conformance: N failures`.
+
+Golden fixtures: `tests/fixtures/ucp/2026-04-08*` come from running the 0.5.3
+release code (`tests/golden/capture-original.php`); `2026-08-25` and
+`2026-01-23` are snapshots, rewritten with `FD_UPDATE_SNAPSHOTS=1`.
 
 ## Coverage / scope
 

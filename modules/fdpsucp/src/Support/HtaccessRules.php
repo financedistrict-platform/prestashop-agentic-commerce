@@ -36,6 +36,7 @@ final class HtaccessRules
             . "<IfModule mod_rewrite.c>\n"
             . "RewriteEngine On\n"
             . "RewriteRule ^\\.well-known/ucp/?$ index.php?fc=module&module=fdpsucp&controller=discovery [QSA,L]\n"
+            . "RewriteRule ^\\.well-known/ucp/(\\d{4}-\\d{2}-\\d{2})/?$ index.php?fc=module&module=fdpsucp&controller=discovery&ucp_version=$1 [QSA,L]\n"
             . "RewriteRule ^module/fdpsucp/api(?:/(.*))?$ index.php?fc=module&module=fdpsucp&controller=api&ucp_path=$1 [QSA,L]\n"
             . "</IfModule>\n"
             . self::MARKER . " end\n";
@@ -54,11 +55,14 @@ final class HtaccessRules
      */
     public static function apply(string $htaccess): string
     {
-        if (self::contains($htaccess)) {
+        $block = self::block();
+        if (strpos($htaccess, $block) !== false) {
             return $htaccess;
         }
+        if (self::contains($htaccess)) {
+            $htaccess = self::remove($htaccess);
+        }
 
-        $block = self::block();
         $pos = strpos($htaccess, self::PS_MARKER);
 
         if ($pos === false) {

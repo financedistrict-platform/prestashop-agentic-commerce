@@ -1,0 +1,66 @@
+{
+    "ucp": {
+        "version": "2026-08-25",
+        "status": "success",
+        "capabilities": {
+            "dev.ucp.shopping.cart": [
+                {
+                    "version": "2026-08-25"
+                }
+            ]
+        }
+    },
+    "id": "cart_1",
+    "currency": "EUR",
+    "line_items": [
+        {
+            "id": "li_1",
+            "item": {
+                "id": "101",
+                "title": "Organic Coffee Beans 1kg",
+                "price": 1800
+            },
+            "quantity": 2,
+            "totals": [
+                {
+                    "type": "subtotal",
+                    "amount": 3600
+                },
+                {
+                    "type": "total",
+                    "amount": 3600
+                }
+            ]
+        },
+        {
+            "id": "li_2",
+            "item": {
+                "id": "205",
+                "title": "Ceramic Pour-Over Dripper",
+                "price": 600
+            },
+            "quantity": 1,
+            "totals": [
+                {
+                    "type": "subtotal",
+                    "amount": 600
+                },
+                {
+                    "type": "total",
+                    "amount": 600
+                }
+            ]
+        }
+    ],
+    "totals": [
+        {
+            "type": "subtotal",
+            "amount": 4200
+        },
+        {
+            "type": "total",
+            "amount": 4200
+        }
+    ],
+    "messages": []
+}

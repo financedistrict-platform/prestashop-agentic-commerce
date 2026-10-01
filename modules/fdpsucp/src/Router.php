@@ -8,7 +8,12 @@ use FD\PrismUcp\Checkout\CheckoutService;
 use FD\PrismUcp\Http\Response;
 use FD\PrismUcp\Orders\OrderService;
 use FD\PrismUcp\Payment\PaymentRegistry;
+use FD\PrismUcp\Ucp\AgentProfileFetcher;
+use FD\PrismUcp\Ucp\RequestContext;
 use FD\PrismUcp\Ucp\UcpError;
+use FD\PrismUcp\Ucp\VersionPin;
+use FD\PrismUcp\Ucp\VersionRegistry;
+use FD\PrismUcp\Ucp\VersionResolver;
 
 if (!defined('_PS_VERSION_')) {
     exit;
@@ -24,7 +29,8 @@ final class Router
         private \Context $context,
         private PaymentRegistry $registry,
         private string $endpointBase,
-        private string $agentFingerprint
+        private string $agentFingerprint,
+        private ?VersionResolver $resolver = null
     ) {
     }
 
@@ -49,6 +55,26 @@ final class Router
         // instead of forcing a cart's `cart_secret` into a `*-Session-*` header.
         $sessionSecret = (string) ($headers['ucp-session-secret'] ?? $headers['ucp-cart-secret'] ?? '');
 
+        $versions = $this->resolver?->versions() ?? VersionRegistry::fromConfiguration();
+        RequestContext::set(new RequestContext($versions, $versions->currentWire()->version()));
+        if ($versions->assertValid() !== null) {
+            return UcpError::response('configuration_invalid', 'UCP configuration is invalid', 500);
+        }
+
+        $resolver = $this->resolver ?? new VersionResolver($versions, new AgentProfileFetcher());
+        $agentHeader = $headers['ucp-agent'] ?? null;
+        $context = $resolver->resolve($agentHeader);
+        if ($context->rejection() !== null) {
+            return $context->rejectionResponse();
+        }
+        RequestContext::set($context);
+        $pin = new VersionPin($resolver, $agentHeader);
+
+        $capability = ['catalog' => 'catalog.search', 'carts' => 'cart'][$segments[0] ?? ''] ?? null;
+        if ($capability !== null && !$context->wire()->supports($capability)) {
+            return UcpError::response('capabilities_incompatible', 'This capability is not available in UCP version ' . $context->version(), 404);
+        }
+
         // /catalog/...
         if (($segments[0] ?? '') === 'catalog') {
             $catalog = new CatalogService($this->context);
@@ -63,7 +89,7 @@ final class Router
 
         // /carts[/{id}[/checkout]]
         if (($segments[0] ?? '') === 'carts') {
-            $cart = new CartService($this->context, $this->registry, $this->endpointBase, $this->agentFingerprint, $sessionSecret);
+            $cart = new CartService($this->context, $this->registry, $this->endpointBase, $this->agentFingerprint, $sessionSecret, $pin);
             $id = $segments[1] ?? null;
             $action = $segments[2] ?? null;
 
@@ -90,7 +116,7 @@ final class Router
 
         // /checkout-sessions[/{id}[/complete|cancel]]
         if (($segments[0] ?? '') === 'checkout-sessions') {
-            $checkout = new CheckoutService($this->context, $this->registry, $this->endpointBase, $this->agentFingerprint, $sessionSecret);
+            $checkout = new CheckoutService($this->context, $this->registry, $this->endpointBase, $this->agentFingerprint, $sessionSecret, $pin);
             $id = $segments[1] ?? null;
             $action = $segments[2] ?? null;
 

@@ -9,6 +9,8 @@ use FD\PrismUcp\Ucp\Formatter;
 use FD\PrismUcp\Ucp\SessionRepository;
 use FD\PrismUcp\Ucp\UcpError;
 use FD\PrismUcp\Ucp\UcpStatus;
+use FD\PrismUcp\Ucp\RequestContext;
+use FD\PrismUcp\Ucp\VersionPin;
 
 if (!defined('_PS_VERSION_')) {
     exit;
@@ -29,7 +31,8 @@ final class CheckoutService
         private PaymentRegistry $registry,
         private string $endpointBase,
         private string $agentFingerprint,
-        private string $sessionSecret = ''
+        private string $sessionSecret = '',
+        private ?VersionPin $pin = null
     ) {
         $this->sessions = new SessionRepository();
         $this->cartBuilder = new CartBuilder();
@@ -53,6 +56,9 @@ final class CheckoutService
         if ($idempotencyKey) {
             $prior = $this->sessions->findByIdempotencyKey($idempotencyKey, $this->idShop());
             if ($prior && ($prior['agent_fingerprint'] ?? '') === $this->agentFingerprint) {
+                if ($pinError = $this->pinError($prior)) {
+                    return $pinError;
+                }
                 $secret = bin2hex(random_bytes(32));
                 $this->sessions->update($prior['session_uid'], $this->idShop(), [
                     'session_secret_hash' => hash('sha256', $secret),
@@ -140,6 +146,7 @@ final class CheckoutService
             'agent_fingerprint' => $this->agentFingerprint,
             'session_secret_hash' => hash('sha256', $secret),
             'idempotency_key' => $idempotencyKey,
+            'ucp_version' => RequestContext::current()->sessionPin(),
             'created_at' => $now,
             'updated_at' => $now,
             'expires_at' => date('Y-m-d H:i:s', time() + 6 * 3600),
@@ -161,6 +168,9 @@ final class CheckoutService
         if (!$session) {
             return UcpError::response('checkout_not_found', 'Checkout session not found', 404);
         }
+        if ($pinError = $this->pinError($session)) {
+            return $pinError;
+        }
         if ($authError = $this->sessionAuthError($session)) {
             return $authError;
         }
@@ -175,6 +185,9 @@ final class CheckoutService
         $session = $this->sessions->findByUid($uid, $this->idShop());
         if (!$session) {
             return UcpError::response('checkout_not_found', 'Checkout session not found', 404);
+        }
+        if ($pinError = $this->pinError($session)) {
+            return $pinError;
         }
         if ($authError = $this->sessionAuthError($session)) {
             return $authError;
@@ -274,6 +287,9 @@ final class CheckoutService
         if (!$session) {
             return UcpError::response('checkout_not_found', 'Checkout session not found', 404);
         }
+        if ($pinError = $this->pinError($session)) {
+            return $pinError;
+        }
         if ($authError = $this->sessionAuthError($session)) {
             return $authError;
         }
@@ -299,6 +315,9 @@ final class CheckoutService
         if ($idempotencyKey) {
             $prior = $this->sessions->findByIdempotencyKey($idempotencyKey, $this->idShop());
             if ($prior && $this->ownsSession($prior) && $prior['status'] === 'completed' && !empty($prior['id_order'])) {
+                if ($pinError = $this->pinError($prior)) {
+                    return $pinError;
+                }
                 $order = new \Order((int) $prior['id_order']);
                 if (\Validate::isLoadedObject($order)) {
                     return Response::json(200, Formatter::completeResponse($prior, $order, $this->registry));
@@ -309,6 +328,9 @@ final class CheckoutService
         $session = $this->sessions->findByUid($uid, $this->idShop());
         if (!$session) {
             return UcpError::response('checkout_not_found', 'Checkout session not found', 404);
+        }
+        if ($pinError = $this->pinError($session)) {
+            return $pinError;
         }
         if ($authError = $this->sessionAuthError($session)) {
             return $authError;
@@ -332,18 +354,11 @@ final class CheckoutService
 
         $payment = $body['payment'] ?? null;
         $instrument = $payment['instruments'][0] ?? null;
-        if (!is_array($instrument)
-            || empty($instrument['id'])
-            || empty($instrument['handler_id'])
-            || empty($instrument['type'])
-            || !isset($instrument['credential'])
-        ) {
-            return UcpError::response('invalid_instrument', 'payment.instruments[0].id, handler_id, type and credential are required', 400);
+        $guard = self::instrumentError($instrument);
+        if ($guard !== null) {
+            return UcpError::response('invalid_instrument', $guard, 400);
         }
-        if (is_array($instrument['credential']) && empty($instrument['credential']['type'])) {
-            return UcpError::response('invalid_instrument', 'payment.instruments[0].credential.type is required', 400);
-        }
-        $handlerId = (string) $instrument['handler_id'];
+        $handlerId = $this->registry->canonicalId((string) $instrument['handler_id']);
         if (!$this->registry->get($handlerId)) {
             return UcpError::response('unknown_handler', "Unknown payment handler: $handlerId", 422);
         }
@@ -361,14 +376,21 @@ final class CheckoutService
             return UcpError::response('cart_build_failed', 'Could not build the cart for this session', 422);
         }
 
-        $result = $this->registry->settle($handlerId, [
-            'session' => $session,
-            'cart' => $cart,
-            'handler_id' => $handlerId,
-            'instrument_type' => (string) $instrument['type'],
-            'credential' => $instrument['credential'],
-            'checkout_meta' => json_decode($session['payment_meta'] ?? 'null', true),
-        ]);
+        try {
+            $result = $this->registry->settle($handlerId, [
+                'session' => $session,
+                'cart' => $cart,
+                'handler_id' => $handlerId,
+                'instrument_type' => $instrument['type'] ?? null,
+                'credential' => $instrument['credential'],
+                'checkout_meta' => json_decode($session['payment_meta'] ?? 'null', true),
+            ]);
+        } catch (\Throwable $e) {
+            $this->sessions->update($uid, $this->idShop(), ['status' => 'incomplete']);
+            \PrestaShopLogger::addLog('[FD UCP] Settlement failed: ' . $e->getMessage(), 3);
+
+            return UcpError::response('payment_failed', 'Payment settlement failed', 422);
+        }
 
         if (empty($result['success']) || empty($result['id_order'])) {
             $this->sessions->update($uid, $this->idShop(), ['status' => 'incomplete']);
@@ -402,6 +424,24 @@ final class CheckoutService
     }
 
     // --------------------------------------------------------------- helpers
+
+    public static function instrumentError(mixed $instrument): ?string
+    {
+        if (!is_array($instrument)
+            || empty($instrument['handler_id'])
+            || !is_string($instrument['handler_id'])
+            || !isset($instrument['credential'])
+        ) {
+            return 'payment.instruments[0].handler_id and credential are required';
+        }
+
+        return null;
+    }
+
+    private function pinError(array $session): ?\FD\PrismUcp\Http\Response
+    {
+        return $this->pin?->check($session['ucp_version'] ?? null);
+    }
 
     /**
      * Build a transient Cart to price the session and (if an address is set)

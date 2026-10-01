@@ -17,6 +17,7 @@
 
 use FD\PrismUcp\Payment\PaymentRegistry;
 use FD\PrismUcp\Ucp\Formatter;
+use FD\PrismUcp\Ucp\VersionRegistry;
 
 if (!defined('_PS_VERSION_')) {
     exit;
@@ -37,16 +38,25 @@ class FdPsUcpDiscoveryModuleFrontController extends ModuleFrontController
         // which the PrestaShop admin requires to stay navigable in the official
         // image. (A clean /ucp/v1 route via hookModuleRoutes is available when
         // Friendly URLs are on, but that breaks Back-Office navigation here.)
-        $endpoint = rtrim($this->context->link->getBaseLink(), '/') . '/module/fdpsucp/api';
+        $storeBase = rtrim($this->context->link->getBaseLink(), '/');
+        $endpoint = $storeBase . '/module/fdpsucp/api';
         $storeName = Configuration::get('PS_SHOP_NAME') ?: 'PrestaShop';
         $registry = PaymentRegistry::collect();
 
-        $profile = Formatter::profile($endpoint, $storeName, $registry);
+        $result = Formatter::discovery(
+            VersionRegistry::fromConfiguration(),
+            (string) Tools::getValue('ucp_version', ''),
+            $registry,
+            $storeBase,
+            $endpoint,
+            $storeName
+        );
 
+        http_response_code($result['status']);
         header('Content-Type: application/json');
         header('Cache-Control: public, max-age=300');
         header('Access-Control-Allow-Origin: *');
-        echo json_encode($profile, JSON_UNESCAPED_SLASHES | JSON_PRETTY_PRINT);
+        echo json_encode($result['body'], JSON_UNESCAPED_SLASHES | JSON_PRETTY_PRINT);
         exit;
     }
 }
