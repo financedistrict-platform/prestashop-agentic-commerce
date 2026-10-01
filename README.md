@@ -12,7 +12,7 @@
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="License: MIT"></a>
   <a href="#"><img src="https://img.shields.io/badge/PHP-8.1+-8892BF.svg" alt="PHP 8.1+"></a>
   <a href="#"><img src="https://img.shields.io/badge/PrestaShop-1.7.8%20|%208.x%20|%209.x-DF0067.svg" alt="PrestaShop 1.7.8+ / 8.x / 9.x"></a>
-  <a href="https://ucp.dev"><img src="https://img.shields.io/badge/UCP-v2026--08--25-green.svg" alt="UCP v2026-08-25"></a>
+  <a href="https://ucp.dev"><img src="https://img.shields.io/badge/UCP-2026--04--08%20|%202026--08--25%20|%202026--01--23-green.svg" alt="UCP 2026-04-08 / 2026-08-25 / 2026-01-23"></a>
 </p>
 
 ---
@@ -119,6 +119,9 @@ Two paths must reach the module's front controllers: the spec-fixed `/.well-know
 location = /.well-known/ucp {
     rewrite ^ /index.php?fc=module&module=fdpsucp&controller=discovery last;
 }
+location ~ ^/\.well-known/ucp/\d{4}-\d{2}-\d{2}/?$ {
+    rewrite ^/\.well-known/ucp/(\d{4}-\d{2}-\d{2})/?$ /index.php?fc=module&module=fdpsucp&controller=discovery&ucp_version=$1 last;
+}
 location /module/fdpsucp/api/ {
     rewrite ^/module/fdpsucp/api/(.*)$ /index.php?fc=module&module=fdpsucp&controller=api&ucp_path=$1 last;
 }
@@ -128,6 +131,7 @@ The equivalent Apache rules (for reference, or a read-only `.htaccess`):
 
 ```apache
 RewriteRule ^\.well-known/ucp/?$ index.php?fc=module&module=fdpsucp&controller=discovery [QSA,L]
+RewriteRule ^\.well-known/ucp/(\d{4}-\d{2}-\d{2})/?$ index.php?fc=module&module=fdpsucp&controller=discovery&ucp_version=$1 [QSA,L]
 RewriteRule ^module/fdpsucp/api(?:/(.*))?$ index.php?fc=module&module=fdpsucp&controller=api&ucp_path=$1 [QSA,L]
 ```
 
@@ -138,6 +142,35 @@ RewriteRule ^module/fdpsucp/api(?:/(.*))?$ index.php?fc=module&module=fdpsucp&co
 1. Go to **Modules → Module Manager → Finance District Prism → Configure**
 2. Enter your **Prism Gateway URL** and **API Key** (stored per-shop)
 3. Save — the handler is advertised in discovery only once configured
+
+### UCP versions
+
+The store speaks three UCP versions. Set them under **Modules → Finance District UCP → Configure → UCP versions**:
+
+| Setting | Configuration key | Default | Meaning |
+|---------|-------------------|---------|---------|
+| Current UCP version | `FDPSUCP_UCP_VERSION` | `2026-04-08` | Served at `/.well-known/ucp` and to agents that do not declare a version. Same bytes as module 0.5.3. |
+| Also supported versions | `FDPSUCP_UCP_SUPPORTED_VERSIONS` (JSON list) | `["2026-08-25","2026-01-23"]` | Extra versions an agent may pick. Each one has a leaf profile at `/.well-known/ucp/{version}` and is listed in the root profile under `ucp.supported_versions`. |
+| Version negotiation | `FDPSUCP_UCP_NEGOTIATION` | `lenient` | How to treat an agent whose profile cannot be used (see below). |
+
+An agent picks a version by sending `UCP-Agent: profile="https://…"`. The module fetches that profile (HTTPS only, public IPs only, 3 s timeout, 64 KiB cap, no redirects, cached 10 minutes) and reads `ucp.version`:
+
+| Agent profile | `lenient` (default) | `strict` |
+|---------------|---------------------|----------|
+| No `UCP-Agent` header | current version, as before | same |
+| Unreachable, not HTTPS, private host, too large, timeout | current version + warning log | `424 agent_profile_unavailable` |
+| No or malformed `ucp.version` | current version + warning log | `422 version_unsupported` |
+| Unknown version date | current version + warning log | `422 version_unsupported` |
+| Known version, disabled in settings | `422 version_unsupported` | same |
+| Enabled version | that version | same |
+
+`lenient` is a deliberate deviation from the UCP spec, which tells a business to reject an agent it cannot negotiate with. It keeps agents written for 0.5.3 working; pick `strict` to follow the spec to the letter.
+
+A checkout session or cart remembers the version its agent declared at creation. A later call that declares a different enabled version gets `422 version_unsupported`; a later call whose profile cannot be read keeps the stored version. Version `2026-01-23` has no cart or catalog, so those routes answer `404 capabilities_incompatible` in that version. Every resolution fires the `actionFdUcpProfileResolution` hook with `outcome`, `version` and `host`.
+
+An unknown stored value is rejected on save. If one is stored anyway, the module configuration page shows an error and every UCP route answers `500 configuration_invalid`; the shop itself keeps running.
+
+Payment instruments from 0.5.3-era agents still complete: `handler_id` `x402` or `xyz.fd.prism_payment`, instrument `type` `x402`, `tokenized`, `default` or missing, and a credential with or without `type`. The Prism quote binding and Prism settlement stay the guards.
 
 ### Agent authentication (closed by default)
 
@@ -185,6 +218,7 @@ All shopping endpoints are served under `/module/fdpsucp/api` (advertised as the
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | `GET` | `/.well-known/ucp` | UCP discovery profile — capabilities, payment handlers, store metadata |
+| `GET` | `/.well-known/ucp/{version}` | Discovery profile for one enabled UCP version (`404 version_unsupported` otherwise) |
 
 ### Catalog
 
@@ -290,8 +324,13 @@ BASE_URL=https://your-store.example.com bash modules/fdpsucp/tests/curl/30-integ
 docker exec -u www-data -w /var/www/html "$C" \
   php modules/fdpsucp/tests/integration/multistore-isolation.php
 
-# Schema conformance vs the UCP spec repo (tools/ucp/source/schemas)
-python modules/fdpsucp/tests/conformance/schema_conformance.py
+# Schema conformance of the recorded fixtures, per UCP version (offline)
+for V in 2026-01-23 2026-04-08 2026-08-25; do
+  uv run --with jsonschema --with referencing python modules/fdpsucp/tests/conformance/schema_conformance.py \
+    --ucp-version $V --schema-dir "$UCP_SPEC/v$V/source/schemas" \
+    --schema-map modules/fdpsucp/tests/conformance/schema-map.json \
+    --fixtures modules/fdpsucp/tests/fixtures/ucp/$V
+done
 ```
 
 ### Test Summary
