@@ -12,7 +12,7 @@ if (!defined('_PS_VERSION_')) {
  * carries the X-API-Key header; non-2xx / invalid-JSON responses return null
  * (the caller decides how to degrade).
  */
-final class PrismClient
+class PrismClient
 {
     private string $apiUrl;
     private string $apiKey;
@@ -28,9 +28,9 @@ final class PrismClient
      *
      * @return array<string,mixed>|null
      */
-    public function fetchUcpHandlers(): ?array
+    public function fetchUcpHandlers(string $ucpVersion): ?array
     {
-        return $this->request('GET', '/api/v2/merchant/ucp/handlers', null, 15);
+        return $this->request('GET', '/api/v2/merchant/ucp/handlers?ucp_version=' . rawurlencode($ucpVersion), null, 15);
     }
 
     /**
@@ -86,7 +86,12 @@ final class PrismClient
      * @param array<string,mixed>|null $body
      * @return array<string,mixed>|null
      */
-    private function request(string $method, string $path, ?array $body, int $timeout): ?array
+    public function userAgent(): string
+    {
+        return 'fd-prestashop-prism/' . \FdPsPrism::VERSION;
+    }
+
+    protected function request(string $method, string $path, ?array $body, int $timeout): ?array
     {
         if (!function_exists('curl_init')) {
             \PrestaShopLogger::addLog("[FD Prism] cURL unavailable for $method $path", 3);
@@ -104,6 +109,7 @@ final class PrismClient
             CURLOPT_CUSTOMREQUEST => $method,
             CURLOPT_RETURNTRANSFER => true,
             CURLOPT_HTTPHEADER => $headers,
+            CURLOPT_USERAGENT => $this->userAgent(),
             CURLOPT_TIMEOUT => $timeout,
             CURLOPT_CONNECTTIMEOUT => 10,
             // Explicit TLS verification — the API key travels on this connection.
