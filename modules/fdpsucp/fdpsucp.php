@@ -22,7 +22,7 @@ class FdPsUcp extends Module
 {
     public const UCP_VERSION = VersionRegistry::DEFAULT_CURRENT;
 
-    public const VERSION = '0.7.0';
+    public const VERSION = '0.7.1';
 
     public function __construct()
     {

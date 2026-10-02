@@ -29,4 +29,4 @@ require_once dirname(__DIR__) . '/fdpsucp.php';
 require_once dirname(__DIR__, 2) . '/fdpsprism/fdpsprism.php';
 require_once __DIR__ . '/support/GoldenRenderer.php';
 require_once __DIR__ . '/support/FixtureProfileFetcher.php';
-require_once __DIR__ . '/support/UpgradedStore.php';
+require_once __DIR__ . '/support/LegacyVersionStore.php';
