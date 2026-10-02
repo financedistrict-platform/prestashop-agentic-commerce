@@ -17,7 +17,7 @@ final class FdTestRecordedPrismClient extends PrismClient
         parent::__construct('https://gw.example', 'test-key');
     }
 
-    protected function request(string $method, string $path, ?array $body, int $timeout): ?array
+    protected function request(string $method, string $path, ?array $body, int $timeout, string $ucpVersion): ?array
     {
         $this->paths[] = "$method $path";
         $decoded = $this->body === null ? null : json_decode($this->body, true);

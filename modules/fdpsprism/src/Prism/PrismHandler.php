@@ -188,7 +188,8 @@ final class PrismHandler implements PaymentHandlerInterface, VersionedPaymentHan
             PrismClient::minorToMajorString($total),
             $currency,
             $resourceUrl,
-            "Order checkout at $storeName"
+            "Order checkout at $storeName",
+            RequestContext::current()->version()
         );
 
         if (!$result) {
@@ -237,7 +238,7 @@ final class PrismHandler implements PaymentHandlerInterface, VersionedPaymentHan
         }
 
         // Settle on-chain via Prism.
-        $result = $this->client()->settle($authorization);
+        $result = $this->client()->settle($authorization, RequestContext::current()->version());
         if (!$result) {
             return ['success' => false, 'error' => 'Prism settlement request failed'];
         }
