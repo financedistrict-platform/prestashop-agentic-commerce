@@ -250,7 +250,7 @@ class FdPsUcp extends Module
                     <div class="form-group">
                         <label>' . $this->trans('Version negotiation', [], 'Modules.Fdpsucp.Admin') . '</label>
                         <select class="form-control" name="' . VersionRegistry::KEY_NEGOTIATION . '">' . $negotiationOptions . '</select>
-                        <p class="help-block">' . $this->trans('lenient: an agent whose profile cannot be read or declares an unknown version gets the current version. strict: such agents are refused.', [], 'Modules.Fdpsucp.Admin') . '</p>
+                        <p class="help-block">' . $this->trans('lenient: an agent whose profile cannot be read or declares no version gets the current version. strict: such agents are refused.', [], 'Modules.Fdpsucp.Admin') . '</p>
                     </div>
                     <button type="submit" name="submitFdpsucpVersions" class="btn btn-default">' . $this->trans('Save', [], 'Admin.Actions') . '</button>
                 </form>

@@ -335,16 +335,6 @@ for V in 2026-01-23 2026-04-08 2026-08-25; do
 done
 ```
 
-### Test Summary
-
-| Module | Unit | Integration | Total |
-|--------|------|-------------|-------|
-| fdpsucp (UCP core) | 18 | 18 (curl) + 8 (isolation) | 44 |
-| fdpsprism (Prism guard) | 14 | — | 14 |
-| **Total** | **32** | **34** | **66** |
-
-Schema conformance: discovery and checkout responses conform; catalog and order response shapes have known gaps tracked in `BUILD_PLAN.md` §DoD-5.
-
 ## Development
 
 ### Project Structure
