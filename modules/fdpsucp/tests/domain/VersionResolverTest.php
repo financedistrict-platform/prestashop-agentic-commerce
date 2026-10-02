@@ -35,22 +35,22 @@ final class VersionResolverTest extends TestCase
         $declares = static fn (?string $v): string => FdTestFixtureProfileFetcher::declaring($v);
 
         return [
-            'unreachable lenient' => [null, 'lenient', null, 'unreachable', '2026-04-08'],
-            'unreachable strict' => [null, 'strict', 424, 'unreachable', null],
-            'undeclared lenient' => [$declares(null), 'lenient', null, 'undeclared', '2026-04-08'],
-            'undeclared strict' => [$declares(null), 'strict', 422, 'undeclared', null],
-            'malformed lenient' => [$declares('April 2026'), 'lenient', null, 'undeclared', '2026-04-08'],
-            'not json lenient' => ['<html>', 'lenient', null, 'unreachable', '2026-04-08'],
-            'unknown lenient' => [$declares('2026-01-11'), 'lenient', null, 'unknown', '2026-04-08'],
-            'unknown strict' => [$declares('2026-01-11'), 'strict', 422, 'unknown', null],
-            'matched lenient' => [$declares('2026-08-25'), 'lenient', null, 'matched', '2026-08-25'],
-            'matched strict' => [$declares('2026-01-23'), 'strict', null, 'matched', '2026-01-23'],
-            'matched current' => [$declares('2026-04-08'), 'lenient', null, 'matched', '2026-04-08'],
+            'unreachable lenient' => [null, 'lenient', null, 'unreachable', '2026-04-08', null],
+            'unreachable strict' => [null, 'strict', 424, 'unreachable', null, 'profile_unreachable'],
+            'undeclared lenient' => [$declares(null), 'lenient', null, 'undeclared', '2026-04-08', null],
+            'undeclared strict' => [$declares(null), 'strict', 422, 'undeclared', null, 'profile_malformed'],
+            'malformed lenient' => [$declares('April 2026'), 'lenient', null, 'undeclared', '2026-04-08', null],
+            'not json lenient' => ['<html>', 'lenient', null, 'unreachable', '2026-04-08', null],
+            'unknown lenient' => [$declares('2026-01-11'), 'lenient', 422, 'unknown', null, 'version_unsupported'],
+            'unknown strict' => [$declares('2026-01-11'), 'strict', 422, 'unknown', null, 'version_unsupported'],
+            'matched lenient' => [$declares('2026-08-25'), 'lenient', null, 'matched', '2026-08-25', null],
+            'matched strict' => [$declares('2026-01-23'), 'strict', null, 'matched', '2026-01-23', null],
+            'matched current' => [$declares('2026-04-08'), 'lenient', null, 'matched', '2026-04-08', null],
         ];
     }
 
     #[DataProvider('table')]
-    public function test_resolution_table(?string $body, string $negotiation, ?int $status, string $outcome, ?string $served): void
+    public function test_resolution_table(?string $body, string $negotiation, ?int $status, string $outcome, ?string $served, ?string $code): void
     {
         $context = self::resolveWith($body, $negotiation);
 
@@ -62,7 +62,7 @@ final class VersionResolverTest extends TestCase
             return;
         }
         $this->assertSame($status, $context->rejection()['status']);
-        $this->assertSame($status === 424 ? 'agent_profile_unavailable' : 'version_unsupported', $context->rejection()['code']);
+        $this->assertSame($code, $context->rejection()['code']);
     }
 
     public function test_missing_header_keeps_todays_behaviour(): void

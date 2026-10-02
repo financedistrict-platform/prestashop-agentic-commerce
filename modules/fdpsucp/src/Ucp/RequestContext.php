@@ -18,7 +18,7 @@ final class RequestContext
     public const OUTCOME_UNKNOWN = 'unknown';
     public const OUTCOME_DISABLED = 'disabled';
 
-    public const FALLBACK_OUTCOMES = [self::OUTCOME_UNREACHABLE, self::OUTCOME_UNDECLARED, self::OUTCOME_UNKNOWN];
+    public const FALLBACK_OUTCOMES = [self::OUTCOME_UNREACHABLE, self::OUTCOME_UNDECLARED];
 
     private static ?self $current = null;
 

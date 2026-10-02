@@ -24,7 +24,7 @@ abstract class WireBase implements WireFormat
                     'version' => $v,
                     'spec' => 'https://ucp.dev/' . $v . '/specification/overview',
                     'transport' => 'rest',
-                    'schema' => 'https://ucp.dev/' . $v . '/services/shopping/rest.openapi.json',
+                    'schema' => 'https://ucp.dev/' . $v . '/services/shopping/' . $this->serviceSchemaFile(),
                     'endpoint' => $endpoint,
                 ]],
             ],
@@ -203,6 +203,11 @@ abstract class WireBase implements WireFormat
     public function supports(string $logical): bool
     {
         return isset($this->capabilities()[$logical]);
+    }
+
+    protected function serviceSchemaFile(): string
+    {
+        return 'rest.openapi.json';
     }
 
     protected function profileCapabilities(string $base): array

@@ -47,6 +47,11 @@ class Wire20260123 extends WireBase
         ];
     }
 
+    protected function serviceSchemaFile(): string
+    {
+        return 'openapi.json';
+    }
+
     protected function profileCapabilities(string $base): array
     {
         $v = $this->version();
