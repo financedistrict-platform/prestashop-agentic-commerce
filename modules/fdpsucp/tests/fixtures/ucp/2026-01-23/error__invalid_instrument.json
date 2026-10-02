@@ -1,0 +1,14 @@
+{
+    "ucp": {
+        "version": "2026-01-23"
+    },
+    "status": "requires_escalation",
+    "messages": [
+        {
+            "type": "error",
+            "code": "invalid_instrument",
+            "content": "payment.instruments[0].handler_id and credential are required",
+            "severity": "requires_buyer_input"
+        }
+    ]
+}

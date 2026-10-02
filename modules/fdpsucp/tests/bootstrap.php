@@ -18,3 +18,15 @@ require_once $src . '/Ucp/UcpStatus.php';
 require_once $src . '/Ucp/UcpError.php';
 require_once $src . '/Ucp/CapabilitySecret.php';
 require_once $src . '/Support/HtaccessRules.php';
+
+if (!defined('_DB_PREFIX_')) {
+    define('_DB_PREFIX_', 'ps_');
+}
+
+require_once __DIR__ . '/PrestaShopStubs.php';
+require_once $src . '/autoload.php';
+require_once dirname(__DIR__) . '/fdpsucp.php';
+require_once dirname(__DIR__, 2) . '/fdpsprism/fdpsprism.php';
+require_once __DIR__ . '/support/GoldenRenderer.php';
+require_once __DIR__ . '/support/FixtureProfileFetcher.php';
+require_once __DIR__ . '/support/UpgradedStore.php';

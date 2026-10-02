@@ -4,6 +4,7 @@ namespace FD\PrismUcp\Catalog;
 
 use FD\PrismUcp\Http\Response;
 use FD\PrismUcp\Ucp\Formatter;
+use FD\PrismUcp\Ucp\RequestContext;
 use FD\PrismUcp\Ucp\UcpError;
 
 if (!defined('_PS_VERSION_')) {
@@ -59,13 +60,7 @@ final class CatalogService
         }
 
         return Response::json(200, [
-            'ucp' => [
-                'version' => Formatter::UCP_VERSION,
-                'status' => 'success',
-                'capabilities' => [
-                    'dev.ucp.shopping.catalog.search' => [['version' => Formatter::UCP_VERSION]],
-                ],
-            ],
+            'ucp' => RequestContext::current()->wire()->envelope(['catalog.search']),
             'products' => $products,
             'pagination' => [
                 'total_count' => $total,
@@ -101,13 +96,7 @@ final class CatalogService
         }
 
         return Response::json(200, [
-            'ucp' => [
-                'version' => Formatter::UCP_VERSION,
-                'status' => 'success',
-                'capabilities' => [
-                    'dev.ucp.shopping.catalog.lookup' => [['version' => Formatter::UCP_VERSION]],
-                ],
-            ],
+            'ucp' => RequestContext::current()->wire()->envelope(['catalog.lookup']),
             'products' => $products,
             'messages' => [],
         ]);

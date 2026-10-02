@@ -16,15 +16,19 @@ if (!defined('_PS_VERSION_')) {
 
 require_once __DIR__ . '/src/autoload.php';
 
+use FD\PrismUcp\Ucp\VersionRegistry;
+
 class FdPsUcp extends Module
 {
-    public const UCP_VERSION = '2026-08-25';
+    public const UCP_VERSION = VersionRegistry::DEFAULT_CURRENT;
+
+    public const VERSION = '0.7.0';
 
     public function __construct()
     {
         $this->name = 'fdpsucp';
         $this->tab = 'others';
-        $this->version = '0.6.0';
+        $this->version = self::VERSION;
         $this->author = 'Finance District';
         $this->need_instance = 0;
         $this->ps_versions_compliancy = ['min' => '1.7.0.0', 'max' => _PS_VERSION_];
@@ -46,6 +50,7 @@ class FdPsUcp extends Module
         return parent::install()
             && $this->installDb()
             && $this->ensureAgentToken()
+            && $this->seedVersionSettings()
             && $this->registerHook('actionUcpCollectPaymentHandlers')
             && $this->registerHook('moduleRoutes')
             && $this->installHtaccessRules();
@@ -136,6 +141,13 @@ class FdPsUcp extends Module
         return true;
     }
 
+    private function seedVersionSettings(): bool
+    {
+        VersionRegistry::seedOnInstall();
+
+        return true;
+    }
+
     /**
      * Back-office screen: show the agent token so the merchant can hand it to
      * their agent, and let them regenerate it (which immediately invalidates
@@ -150,6 +162,15 @@ class FdPsUcp extends Module
             $output .= $this->displayConfirmation(
                 $this->trans('A new agent token was generated. Update your agent configuration — the old token no longer works.', [], 'Modules.Fdpsucp.Admin')
             );
+        }
+
+        if (Tools::isSubmit('submitFdpsucpVersions')) {
+            $output .= $this->saveVersionSettings();
+        }
+
+        $invalid = VersionRegistry::fromConfiguration()->assertValid();
+        if ($invalid !== null) {
+            $output .= $this->displayError($this->trans('UCP version settings are invalid, UCP routes answer configuration_invalid until fixed:', [], 'Modules.Fdpsucp.Admin') . ' ' . htmlspecialchars($invalid, ENT_QUOTES, 'UTF-8'));
         }
 
         $token = (string) Configuration::get('FDPSUCP_AGENT_TOKEN');
@@ -175,12 +196,71 @@ class FdPsUcp extends Module
                     <button type="submit" name="submitFdpsucpRegenerate" class="btn btn-default"
                             onclick="return confirm(\'' . $regen . '?\');">' . $regen . '</button>
                 </form>
+            </div>' . $this->renderVersionSettings($action);
+    }
+
+    private function saveVersionSettings(): string
+    {
+        $current = (string) Tools::getValue(VersionRegistry::KEY_CURRENT, VersionRegistry::DEFAULT_CURRENT);
+        $supported = Tools::getValue(VersionRegistry::KEY_SUPPORTED, []);
+        $supported = is_array($supported) ? array_values(array_map('strval', $supported)) : [];
+        $negotiation = (string) Tools::getValue(VersionRegistry::KEY_NEGOTIATION, VersionRegistry::NEGOTIATION_LENIENT);
+
+        $invalid = (new VersionRegistry($current, $supported, $negotiation))->assertValid();
+        if ($invalid !== null) {
+            return $this->displayError(htmlspecialchars($invalid, ENT_QUOTES, 'UTF-8'));
+        }
+
+        Configuration::updateValue(VersionRegistry::KEY_CURRENT, $current);
+        Configuration::updateValue(VersionRegistry::KEY_SUPPORTED, (string) json_encode(array_values(array_diff($supported, [$current]))));
+        Configuration::updateValue(VersionRegistry::KEY_NEGOTIATION, $negotiation);
+
+        return $this->displayConfirmation($this->trans('UCP version settings saved.', [], 'Modules.Fdpsucp.Admin'));
+    }
+
+    private function renderVersionSettings(string $action): string
+    {
+        $versions = VersionRegistry::fromConfiguration();
+        $esc = static fn (string $v): string => htmlspecialchars($v, ENT_QUOTES, 'UTF-8');
+
+        $currentOptions = '';
+        $supportedBoxes = '';
+        foreach (VersionRegistry::known() as $version) {
+            $currentOptions .= '<option value="' . $esc($version) . '"' . ($version === $versions->current() ? ' selected' : '') . '>' . $esc($version) . '</option>';
+            $supportedBoxes .= '<label class="checkbox-inline"><input type="checkbox" name="' . VersionRegistry::KEY_SUPPORTED . '[]" value="' . $esc($version) . '"'
+                . (in_array($version, $versions->supported(), true) ? ' checked' : '') . '> ' . $esc($version) . '</label> ';
+        }
+        $negotiationOptions = '';
+        foreach (VersionRegistry::negotiationModes() as $mode) {
+            $negotiationOptions .= '<option value="' . $esc($mode) . '"' . ($mode === $versions->negotiation() ? ' selected' : '') . '>' . $esc($mode) . '</option>';
+        }
+
+        return '
+            <div class="panel">
+                <h3><i class="icon icon-cogs"></i> ' . $this->trans('UCP versions', [], 'Modules.Fdpsucp.Admin') . '</h3>
+                <form method="post" action="' . $action . '">
+                    <div class="form-group">
+                        <label>' . $this->trans('Current UCP version', [], 'Modules.Fdpsucp.Admin') . '</label>
+                        <select class="form-control" name="' . VersionRegistry::KEY_CURRENT . '">' . $currentOptions . '</select>
+                    </div>
+                    <div class="form-group">
+                        <label>' . $this->trans('Also supported versions', [], 'Modules.Fdpsucp.Admin') . '</label>
+                        <div>' . $supportedBoxes . '</div>
+                    </div>
+                    <div class="form-group">
+                        <label>' . $this->trans('Version negotiation', [], 'Modules.Fdpsucp.Admin') . '</label>
+                        <select class="form-control" name="' . VersionRegistry::KEY_NEGOTIATION . '">' . $negotiationOptions . '</select>
+                        <p class="help-block">' . $this->trans('lenient: an agent whose profile cannot be read or declares an unknown version gets the current version. strict: such agents are refused.', [], 'Modules.Fdpsucp.Admin') . '</p>
+                    </div>
+                    <button type="submit" name="submitFdpsucpVersions" class="btn btn-default">' . $this->trans('Save', [], 'Admin.Actions') . '</button>
+                </form>
             </div>';
     }
 
     public function uninstall(): bool
     {
         $this->removeHtaccessRules();
+        VersionRegistry::deleteConfiguration();
 
         return $this->uninstallDb() && parent::uninstall();
     }
@@ -245,6 +325,7 @@ class FdPsUcp extends Module
             `agent_fingerprint` VARCHAR(128) NULL,
             `session_secret_hash` VARCHAR(64) NULL,
             `idempotency_key` VARCHAR(128) NULL,
+            `ucp_version` VARCHAR(10) NULL,
             `created_at` DATETIME NOT NULL,
             `updated_at` DATETIME NULL,
             `expires_at` DATETIME NULL,
@@ -264,6 +345,7 @@ class FdPsUcp extends Module
             `line_items` LONGTEXT NULL,
             `agent_fingerprint` VARCHAR(128) NULL,
             `cart_secret_hash` VARCHAR(64) NULL,
+            `ucp_version` VARCHAR(10) NULL,
             `created_at` DATETIME NOT NULL,
             `updated_at` DATETIME NULL,
             PRIMARY KEY (`id_prism_cart`),

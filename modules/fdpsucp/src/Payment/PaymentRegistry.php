@@ -13,6 +13,8 @@ if (!defined('_PS_VERSION_')) {
  */
 final class PaymentRegistry
 {
+    private const ALIASES = ['x402' => 'xyz.fd.prism_payment'];
+
     /** @var array<string,PaymentHandlerInterface> */
     private array $handlers = [];
 
@@ -21,9 +23,16 @@ final class PaymentRegistry
         $this->handlers[$handler->id()] = $handler;
     }
 
+    public function canonicalId(string $id): string
+    {
+        $canonical = self::ALIASES[$id] ?? null;
+
+        return ($canonical !== null && isset($this->handlers[$canonical])) ? $canonical : $id;
+    }
+
     public function get(string $id): ?PaymentHandlerInterface
     {
-        return $this->handlers[$id] ?? null;
+        return $this->handlers[$this->canonicalId($id)] ?? null;
     }
 
     public function isEmpty(): bool
@@ -43,11 +52,14 @@ final class PaymentRegistry
     }
 
     /** @return array<string,array<int,array<string,mixed>>> */
-    public function getUcpDiscoveryHandlers(): array
+    public function getUcpDiscoveryHandlers(?string $version = null): array
     {
         $merged = [];
         foreach ($this->handlers as $handler) {
-            foreach ($handler->getUcpDiscoveryHandlers() as $ns => $entries) {
+            $entriesByNs = ($version !== null && $handler instanceof VersionedPaymentHandlerInterface)
+                ? $handler->getUcpDiscoveryHandlersForVersion($version)
+                : $handler->getUcpDiscoveryHandlers();
+            foreach ($entriesByNs as $ns => $entries) {
                 $merged[$ns] = array_merge($merged[$ns] ?? [], $entries);
             }
         }

@@ -1,0 +1,83 @@
+{
+    "ucp": {
+        "version": "2026-04-08",
+        "services": {
+            "dev.ucp.shopping": [
+                {
+                    "version": "2026-04-08",
+                    "spec": "https://ucp.dev/2026-04-08/specification/overview",
+                    "transport": "rest",
+                    "schema": "https://ucp.dev/2026-04-08/services/shopping/rest.openapi.json",
+                    "endpoint": "https://store.test/module/fdpsucp/api"
+                }
+            ]
+        },
+        "capabilities": {
+            "dev.ucp.shopping.catalog.search": [
+                {
+                    "version": "2026-04-08",
+                    "spec": "https://ucp.dev/2026-04-08/specification/catalog/search",
+                    "schema": "https://ucp.dev/2026-04-08/schemas/shopping/catalog_search.json"
+                }
+            ],
+            "dev.ucp.shopping.catalog.lookup": [
+                {
+                    "version": "2026-04-08",
+                    "spec": "https://ucp.dev/2026-04-08/specification/catalog/lookup",
+                    "schema": "https://ucp.dev/2026-04-08/schemas/shopping/catalog_lookup.json"
+                }
+            ],
+            "dev.ucp.shopping.cart": [
+                {
+                    "version": "2026-04-08",
+                    "spec": "https://ucp.dev/2026-04-08/specification/cart",
+                    "schema": "https://ucp.dev/2026-04-08/schemas/shopping/cart.json"
+                }
+            ],
+            "dev.ucp.shopping.checkout": [
+                {
+                    "version": "2026-04-08",
+                    "spec": "https://ucp.dev/2026-04-08/specification/checkout",
+                    "schema": "https://ucp.dev/2026-04-08/schemas/shopping/checkout.json"
+                }
+            ],
+            "dev.ucp.shopping.fulfillment": [
+                {
+                    "version": "2026-04-08",
+                    "spec": "https://ucp.dev/2026-04-08/specification/fulfillment",
+                    "schema": "https://ucp.dev/2026-04-08/schemas/shopping/fulfillment.json",
+                    "extends": [
+                        "dev.ucp.shopping.checkout",
+                        "dev.ucp.shopping.catalog.search",
+                        "dev.ucp.shopping.catalog.lookup"
+                    ]
+                }
+            ],
+            "dev.ucp.shopping.order": [
+                {
+                    "version": "2026-04-08",
+                    "spec": "https://ucp.dev/2026-04-08/specification/order",
+                    "schema": "https://ucp.dev/2026-04-08/schemas/shopping/order.json"
+                }
+            ]
+        },
+        "payment_handlers": {
+            "xyz.fd.prism_payment": [
+                {
+                    "id": "x402",
+                    "name": "Prism (x402 Stablecoin)",
+                    "version": "2026-01-15",
+                    "spec": "https://gw.example/ucp/prism.md",
+                    "schema": "https://gw.example/ucp/schema.json",
+                    "instrument_schemas": [],
+                    "config": {
+                        "tokenization": false,
+                        "description": "Pay with stablecoins via an AI agent wallet (x402). Settled on-chain by Prism."
+                    }
+                }
+            ]
+        }
+    },
+    "name": "Demo Store",
+    "signing_keys": []
+}

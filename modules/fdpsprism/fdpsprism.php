@@ -17,14 +17,17 @@ if (!defined('_PS_VERSION_')) {
 require_once __DIR__ . '/src/autoload.php';
 
 use FD\PrismPayment\Config\ConfigResolver;
+use FD\PrismPayment\Prism\PrismHandler;
 
 class FdPsPrism extends PaymentModule
 {
+    public const VERSION = '0.7.0';
+
     public function __construct()
     {
         $this->name = 'fdpsprism';
         $this->tab = 'payments_gateways';
-        $this->version = '0.6.0';
+        $this->version = self::VERSION;
         $this->author = 'Finance District';
         $this->need_instance = 0;
         $this->ps_versions_compliancy = ['min' => '1.7.0.0', 'max' => _PS_VERSION_];
@@ -58,6 +61,11 @@ class FdPsPrism extends PaymentModule
         if (empty($params['registry'])) {
             return;
         }
+        if (!interface_exists(\FD\PrismUcp\Payment\VersionedPaymentHandlerInterface::class)) {
+            \PrestaShopLogger::addLog('[FD Prism] Finance District UCP ' . self::VERSION . ' or newer is required; Prism handler not registered', 3);
+
+            return;
+        }
         require_once __DIR__ . '/src/Prism/PrismHandler.php';
         $params['registry']->register(new \FD\PrismPayment\Prism\PrismHandler($this));
     }
@@ -75,13 +83,26 @@ class FdPsPrism extends PaymentModule
             if ($apiUrl !== '' && !Validate::isUrl($apiUrl)) {
                 $output .= $this->displayError($this->trans('The gateway URL is not a valid URL.', [], 'Modules.Fdpsprism.Admin'));
             } else {
+                $this->clearDiscoveryCache(ConfigResolver::apiUrl());
                 Configuration::updateValue(ConfigResolver::KEY_URL, $apiUrl);
                 Configuration::updateValue(ConfigResolver::KEY_API, $apiKey);
+                $this->clearDiscoveryCache(ConfigResolver::apiUrl());
                 $output .= $this->displayConfirmation($this->trans('Settings updated.', [], 'Modules.Fdpsprism.Admin'));
             }
         }
 
         return $output . $this->renderForm();
+    }
+
+    private function clearDiscoveryCache(string $gateway): void
+    {
+        if (!class_exists(\FD\PrismUcp\Ucp\VersionRegistry::class)) {
+            return;
+        }
+        require_once __DIR__ . '/src/Prism/PrismHandler.php';
+        foreach (\FD\PrismUcp\Ucp\VersionRegistry::known() as $ucpVersion) {
+            Configuration::deleteByName(PrismHandler::cacheKey($gateway, $ucpVersion));
+        }
     }
 
     private function renderForm(): string

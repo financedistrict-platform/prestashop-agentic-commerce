@@ -3,12 +3,19 @@
 declare(strict_types=1);
 
 use FD\PrismPayment\Config\ConfigResolver;
+use FD\PrismPayment\Prism\PrismClient;
 use FD\PrismPayment\Prism\PrismHandler;
+use FD\PrismUcp\Ucp\RequestContext;
 use PHPUnit\Framework\TestCase;
 
 final class PrismHandlerTest extends TestCase
 {
     private const GATEWAY = 'https://prism-gw.example';
+    private const PAY_TO = '0x1111111111111111111111111111111111111111';
+    private const ASSET = '0x036CbD53842c5426634e7929541eC2318f3dCF7e';
+
+    private FdTestPrismClient $client;
+    private PaymentModule $module;
 
     protected function setUp(): void
     {
@@ -16,16 +23,56 @@ final class PrismHandlerTest extends TestCase
             ConfigResolver::KEY_URL => self::GATEWAY,
             ConfigResolver::KEY_API => 'key',
         ];
+        PrestaShopLogger::$logs = [];
+        RequestContext::set(null);
+        $this->client = new FdTestPrismClient();
+        $this->module = new PaymentModule();
     }
 
     private function handler(): PrismHandler
     {
-        return new PrismHandler(new PaymentModule());
+        return new PrismHandler($this->module, $this->client);
+    }
+
+    private static function recorded(string $name): array
+    {
+        return json_decode((string) file_get_contents(dirname(__DIR__, 3) . '/fdpsucp/tests/fixtures/prism/' . $name), true);
     }
 
     private function x402Credential(): array
     {
-        return ['type' => 'x402', 'x402Version' => 2, 'paymentPayload' => [], 'paymentRequirements' => []];
+        return [
+            'type' => 'x402',
+            'x402Version' => 2,
+            'paymentPayload' => [
+                'network' => 'eip155:84532',
+                'accepted' => ['network' => 'eip155:84532', 'asset' => self::ASSET],
+                'payload' => ['authorization' => ['to' => self::PAY_TO, 'value' => '4695']],
+            ],
+            'paymentRequirements' => ['asset' => self::ASSET],
+        ];
+    }
+
+    private function checkoutMeta(): array
+    {
+        return [PrismHandler::NS => ['ucp' => [[['config' => ['accepts' => [[
+            'network' => 'eip155:84532',
+            'asset' => self::ASSET,
+            'amount' => '4695',
+            'payTo' => self::PAY_TO,
+        ]]]]]]]];
+    }
+
+    private function settle(mixed $instrumentType, mixed $credential): array
+    {
+        $this->client->responses['POST /api/v2/payment/settle'] = ['success' => true, 'transaction' => '0x' . str_repeat('cd', 32), 'network' => 'eip155:84532'];
+
+        return $this->handler()->settlePayment([
+            'cart' => new Cart(),
+            'instrument_type' => $instrumentType,
+            'credential' => $credential,
+            'checkout_meta' => $this->checkoutMeta(),
+        ]);
     }
 
     public function test_id_is_the_handler_namespace(): void
@@ -33,76 +80,176 @@ final class PrismHandlerTest extends TestCase
         $this->assertSame('xyz.fd.prism_payment', $this->handler()->id());
     }
 
-    public function test_discovery_entry_matches_the_prism_contract(): void
+    public function test_user_agent_comes_from_the_module_version(): void
     {
-        $handlers = $this->handler()->getUcpDiscoveryHandlers();
+        $this->assertSame('fd-prestashop-prism/' . FdPsPrism::VERSION, (new PrismClient(self::GATEWAY, 'key'))->userAgent());
+    }
 
-        $this->assertSame(['xyz.fd.prism_payment'], array_keys($handlers));
-        $entry = $handlers['xyz.fd.prism_payment'][0];
-        $this->assertSame(['id', 'version', 'spec', 'schema', 'available_instruments', 'config'], array_keys($entry));
+    public function test_discovery_is_fetched_per_version(): void
+    {
+        $this->client->responses['GET /api/v2/merchant/ucp/handlers?ucp_version=2026-08-25'] = self::recorded('current-handlers-2026-04-08.json');
+
+        $this->handler()->getUcpDiscoveryHandlersForVersion('2026-08-25');
+
+        $this->assertSame(['GET /api/v2/merchant/ucp/handlers?ucp_version=2026-08-25'], $this->client->paths);
+    }
+
+    public function test_current_entry_keeps_prism_fields_and_overlays_plugin_authored_fields(): void
+    {
+        $this->client->responses['GET /api/v2/merchant/ucp/handlers?ucp_version=2026-04-08'] = self::recorded('current-handlers-2026-04-08.json');
+
+        $entry = $this->handler()->getUcpDiscoveryHandlersForVersion('2026-04-08')[PrismHandler::NS][0];
+
+        $this->assertSame(['id', 'name', 'version', 'spec', 'schema', 'available_instruments', 'config', 'config_schema', 'instrument_schemas'], array_keys($entry));
         $this->assertSame('xyz.fd.prism_payment', $entry['id']);
-        $this->assertSame('2026-10-07', $entry['version']);
-        $this->assertSame(self::GATEWAY . '/ucp/prism.md', $entry['spec']);
-        $this->assertSame(self::GATEWAY . '/ucp/schema.json', $entry['schema']);
+        $this->assertSame('Prism (x402 Stablecoin)', $entry['name']);
         $this->assertSame([['type' => 'x402']], $entry['available_instruments']);
-        $this->assertSame('{}', json_encode($entry['config']));
+        $this->assertSame(['tokenization' => false, 'description' => PrismHandler::DESCRIPTION], $entry['config']);
+    }
+
+    public function test_legacy_entry_yields_one_canonical_entry(): void
+    {
+        $this->client->responses['GET /api/v2/merchant/ucp/handlers?ucp_version=2026-04-08'] = self::recorded('legacy-handlers.json');
+
+        $handlers = $this->handler()->getUcpDiscoveryHandlersForVersion('2026-04-08');
+
+        $this->assertSame([PrismHandler::NS], array_keys($handlers));
+        $this->assertCount(1, $handlers[PrismHandler::NS]);
+        $entry = $handlers[PrismHandler::NS][0];
+        $this->assertSame('xyz.fd.prism_payment', $entry['id']);
+        $this->assertSame('https://gw.example/ucp/schema.json', $entry['schema']);
+        $this->assertArrayNotHasKey('config_schema', $entry);
+        $this->assertSame('Prism (x402 Stablecoin)', $entry['name']);
+    }
+
+    public function test_discovery_uses_the_request_version_by_default(): void
+    {
+        RequestContext::set(RequestContext::forVersion('2026-01-23'));
+        $this->client->responses['GET /api/v2/merchant/ucp/handlers?ucp_version=2026-01-23'] = self::recorded('legacy-handlers.json');
+
+        $this->assertNotSame([], $this->handler()->getUcpDiscoveryHandlers());
+        $this->assertSame(['GET /api/v2/merchant/ucp/handlers?ucp_version=2026-01-23'], $this->client->paths);
+    }
+
+    public function test_discovery_is_cached_per_gateway_and_version(): void
+    {
+        $this->client->responses['GET /api/v2/merchant/ucp/handlers?ucp_version=2026-04-08'] = self::recorded('current-handlers-2026-04-08.json');
+        $this->client->responses['GET /api/v2/merchant/ucp/handlers?ucp_version=2026-08-25'] = self::recorded('current-handlers-2026-04-08.json');
+
+        $this->handler()->getUcpDiscoveryHandlersForVersion('2026-04-08');
+        $this->handler()->getUcpDiscoveryHandlersForVersion('2026-04-08');
+        $this->handler()->getUcpDiscoveryHandlersForVersion('2026-08-25');
+
+        $this->assertCount(2, $this->client->paths);
+        $this->assertNotSame(PrismHandler::cacheKey(self::GATEWAY, '2026-04-08'), PrismHandler::cacheKey(self::GATEWAY, '2026-08-25'));
+        $this->assertNotSame(PrismHandler::cacheKey(self::GATEWAY, '2026-04-08'), PrismHandler::cacheKey('https://other.example', '2026-04-08'));
+        $this->assertMatchesRegularExpression('/^FDPSPRISM_DISC_[0-9a-f]{16}$/', PrismHandler::cacheKey(self::GATEWAY, '2026-04-08'));
+        $this->assertArrayHasKey(PrismHandler::cacheKey(self::GATEWAY, '2026-04-08'), Configuration::$values);
+    }
+
+    public function test_expired_cache_is_refetched(): void
+    {
+        Configuration::$values[PrismHandler::cacheKey(self::GATEWAY, '2026-04-08')] = json_encode(['expires' => time() - 1, 'handlers' => self::recorded('legacy-handlers.json')]);
+        $this->client->responses['GET /api/v2/merchant/ucp/handlers?ucp_version=2026-04-08'] = self::recorded('current-handlers-2026-04-08.json');
+
+        $entry = $this->handler()->getUcpDiscoveryHandlersForVersion('2026-04-08')[PrismHandler::NS][0];
+
+        $this->assertSame('2026-10-07', $entry['version']);
+        $this->assertCount(1, $this->client->paths);
+    }
+
+    public function test_unreachable_or_invalid_prism_omits_the_handler_and_logs_an_error(): void
+    {
+        $this->assertSame([], $this->handler()->getUcpDiscoveryHandlersForVersion('2026-04-08'));
+
+        $this->client->responses['GET /api/v2/merchant/ucp/handlers?ucp_version=2026-08-25'] = [PrismHandler::NS => [['id' => 'other', 'version' => 'v', 'spec' => 's', 'schema' => 's']]];
+        $this->assertSame([], $this->handler()->getUcpDiscoveryHandlersForVersion('2026-08-25'));
+
+        $this->assertCount(2, PrestaShopLogger::$logs);
+        $this->assertSame(3, PrestaShopLogger::$logs[0]['severity']);
     }
 
     public function test_discovery_is_empty_when_not_configured(): void
     {
         Configuration::$values = [];
 
-        $this->assertSame([], $this->handler()->getUcpDiscoveryHandlers());
+        $this->assertSame([], $this->handler()->getUcpDiscoveryHandlersForVersion('2026-04-08'));
+        $this->assertSame([], $this->client->paths);
     }
 
-    public function test_settle_rejects_non_x402_instrument_type(): void
+    public function test_settle_rejects_a_foreign_instrument_type(): void
     {
-        $result = $this->handler()->settlePayment([
-            'instrument_type' => 'tokenized',
-            'credential' => $this->x402Credential(),
-        ]);
+        $result = $this->settle('card', $this->x402Credential());
 
         $this->assertFalse($result['success']);
         $this->assertStringContainsString('"x402"', $result['error']);
     }
 
-    public function test_settle_rejects_credential_without_x402_type(): void
-    {
-        $credential = $this->x402Credential();
-        unset($credential['type']);
-
-        $result = $this->handler()->settlePayment([
-            'instrument_type' => 'x402',
-            'credential' => $credential,
-        ]);
-
-        $this->assertFalse($result['success']);
-        $this->assertStringContainsString('"x402"', $result['error']);
-    }
-
-    public function test_settle_reads_type_from_an_encoded_credential(): void
+    public function test_settle_rejects_a_foreign_credential_type(): void
     {
         $credential = $this->x402Credential();
         $credential['type'] = 'card';
 
-        $result = $this->handler()->settlePayment([
-            'instrument_type' => 'x402',
-            'credential' => base64_encode((string) json_encode($credential)),
-        ]);
+        $result = $this->settle('x402', base64_encode((string) json_encode($credential)));
 
         $this->assertFalse($result['success']);
         $this->assertStringContainsString('"x402"', $result['error']);
     }
 
-    public function test_settle_passes_the_type_check_for_x402(): void
+    public function test_x402_credential_still_passes_the_type_check_and_settles(): void
     {
+        $result = $this->settle('x402', $this->x402Credential());
+
+        $this->assertTrue($result['success'], (string) ($result['error'] ?? ''));
+        $this->assertSame(1001, $result['id_order']);
+        $this->assertSame('0x' . str_repeat('cd', 32), $result['transaction_reference']);
+        $this->assertSame('Prism (x402 Stablecoin)', $this->module->validated[0][3]);
+    }
+
+    public function test_session_prepared_by_the_original_release_still_settles(): void
+    {
+        $this->client->responses['POST /api/v2/payment/settle'] = ['success' => true, 'transaction' => '0x' . str_repeat('cd', 32)];
+        $meta = ['x402' => $this->checkoutMeta()[PrismHandler::NS]];
+
         $result = $this->handler()->settlePayment([
-            'instrument_type' => 'x402',
+            'cart' => new Cart(),
+            'instrument_type' => null,
             'credential' => $this->x402Credential(),
-            'checkout_meta' => null,
+            'checkout_meta' => $meta,
         ]);
 
-        $this->assertFalse($result['success']);
-        $this->assertStringNotContainsString('"x402"', $result['error']);
+        $this->assertTrue($result['success'], (string) ($result['error'] ?? ''));
+        $this->assertSame($meta['x402']['ucp'], $this->handler()->getUcpCheckoutHandlers($meta));
+    }
+
+    public function test_original_era_instruments_settle(): void
+    {
+        $credential = $this->x402Credential();
+        unset($credential['type']);
+
+        foreach ([null, '', 'tokenized', 'default'] as $type) {
+            $this->module->validated = [];
+            $result = $this->settle($type, $credential);
+
+            $this->assertTrue($result['success'], var_export($type, true) . ' ' . ($result['error'] ?? ''));
+        }
+    }
+}
+
+final class FdTestPrismClient extends PrismClient
+{
+    public array $responses = [];
+    public array $paths = [];
+
+    public function __construct()
+    {
+        parent::__construct('https://prism-gw.example', 'key');
+    }
+
+    protected function request(string $method, string $path, ?array $body, int $timeout): ?array
+    {
+        $this->paths[] = "$method $path";
+
+        return $this->responses["$method $path"] ?? null;
     }
 }

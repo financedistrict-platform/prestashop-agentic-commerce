@@ -13,7 +13,7 @@ if (!defined('_PS_VERSION_')) {
  * pricing/shipping engine and the input to order creation; the canonical
  * state still lives in ps_prism_session (the Cart is disposable).
  */
-final class CartBuilder
+class CartBuilder
 {
     /**
      * Create a saved Cart for the given shop/lang/currency holding the

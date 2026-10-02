@@ -13,23 +13,10 @@ if (!defined('_PS_VERSION_')) {
  */
 final class UcpError
 {
-    public const VERSION = '2026-08-25';
+    public const VERSION = VersionRegistry::DEFAULT_CURRENT;
 
     public static function response(string $code, string $message, int $httpStatus = 400): Response
     {
-        return Response::json($httpStatus, [
-            'ucp' => [
-                'version' => self::VERSION,
-                'status' => 'error',
-            ],
-            'messages' => [
-                [
-                    'type' => 'error',
-                    'code' => $code,
-                    'content' => $message,
-                    'severity' => 'fatal',
-                ],
-            ],
-        ]);
+        return Response::json($httpStatus, RequestContext::current()->wire()->error($code, $message));
     }
 }
