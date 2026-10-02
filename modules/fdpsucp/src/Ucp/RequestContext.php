@@ -18,8 +18,6 @@ final class RequestContext
     public const OUTCOME_UNKNOWN = 'unknown';
     public const OUTCOME_DISABLED = 'disabled';
 
-    public const FALLBACK_OUTCOMES = [self::OUTCOME_UNREACHABLE, self::OUTCOME_UNDECLARED];
-
     private static ?self $current = null;
 
     public function __construct(
@@ -79,11 +77,6 @@ final class RequestContext
     public function sessionPin(): ?string
     {
         return $this->outcome === self::OUTCOME_MATCHED ? $this->version : null;
-    }
-
-    public function isFallback(): bool
-    {
-        return in_array($this->outcome, self::FALLBACK_OUTCOMES, true);
     }
 
     public function rejection(): ?array
