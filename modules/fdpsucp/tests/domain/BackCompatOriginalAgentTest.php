@@ -9,6 +9,7 @@ use FD\PrismUcp\Payment\PaymentHandlerInterface;
 use FD\PrismUcp\Payment\PaymentRegistry;
 use FD\PrismUcp\Ucp\SessionRepository;
 use FD\PrismUcp\Ucp\VersionPin;
+use FD\PrismUcp\Ucp\VersionRegistry;
 use FD\PrismUcp\Ucp\VersionResolver;
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
@@ -24,7 +25,7 @@ final class BackCompatOriginalAgentTest extends TestCase
     protected function setUp(): void
     {
         FdTestStubs::reset();
-        FdTestUpgradedStore::seed();
+        VersionRegistry::seedOnUpgrade();
 
         $session = FdTestGoldenRenderer::input('checkout-session.json');
         $session['ucp_version'] = null;
@@ -83,7 +84,7 @@ final class BackCompatOriginalAgentTest extends TestCase
 
         $this->assertSame(200, $response->status, (string) json_encode($response->body));
         $this->assertSame('completed', $response->body['status']);
-        $this->assertSame('2026-04-08', $response->body['ucp']['version']);
+        $this->assertSame(VersionRegistry::LATEST, $response->body['ucp']['version']);
         $this->assertCount(1, $this->handler->settled);
         $this->assertSame('xyz.fd.prism_payment', $this->handler->settled[0]['handler_id']);
         $this->assertSame($instrument['credential'], $this->handler->settled[0]['credential']);
@@ -121,7 +122,7 @@ final class BackCompatOriginalAgentTest extends TestCase
     {
         $this->sessions->rows[self::SESSION_ID]['ucp_version'] = '2026-08-25';
         $pin = new VersionPin(
-            new VersionResolver(FdTestUpgradedStore::registry(), new FdTestFixtureProfileFetcher(['https://agent.example/p' => FdTestFixtureProfileFetcher::declaring('2026-04-08')])),
+            new VersionResolver(FdTestLegacyVersionStore::registry(), new FdTestFixtureProfileFetcher(['https://agent.example/p' => FdTestFixtureProfileFetcher::declaring('2026-04-08')])),
             'profile="https://agent.example/p"'
         );
 
@@ -134,7 +135,7 @@ final class BackCompatOriginalAgentTest extends TestCase
     public function test_pinned_session_is_served_in_its_version_on_a_fallback_outcome(): void
     {
         $this->sessions->rows[self::SESSION_ID]['ucp_version'] = '2026-08-25';
-        $pin = new VersionPin(new VersionResolver(FdTestUpgradedStore::registry(), new FdTestFixtureProfileFetcher([])), 'profile="https://agent.example/p"');
+        $pin = new VersionPin(new VersionResolver(FdTestLegacyVersionStore::registry(), new FdTestFixtureProfileFetcher([])), 'profile="https://agent.example/p"');
 
         $response = $this->service($pin)->get(self::SESSION_ID);
 

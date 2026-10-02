@@ -16,8 +16,6 @@ final class VersionRegistry
     public const LATEST = '2026-08-25';
     public const DEFAULT_CURRENT = self::LATEST;
     public const DEFAULT_SUPPORTED = ['2026-04-08', '2026-01-23'];
-    public const PRE_REGISTRY_CURRENT = '2026-04-08';
-    public const FIRST_LATEST_RELEASE = '0.6.0';
     public const NEGOTIATION_LENIENT = 'lenient';
     public const NEGOTIATION_STRICT = 'strict';
 
@@ -78,28 +76,19 @@ final class VersionRegistry
         \Configuration::updateValue(self::KEY_SUPPORTED, (string) json_encode(self::DEFAULT_SUPPORTED));
     }
 
-    public static function seedOnUpgrade(string $installedVersion): void
+    public static function seedOnUpgrade(): void
     {
         $stored = \Configuration::get(self::KEY_CURRENT);
         if (is_string($stored) && $stored !== '') {
             return;
         }
 
-        $current = self::currentForInstalledVersion($installedVersion);
-        \Configuration::updateValue(self::KEY_CURRENT, $current);
+        \Configuration::updateValue(self::KEY_CURRENT, self::LATEST);
 
         $rawSupported = \Configuration::get(self::KEY_SUPPORTED);
         if (!is_string($rawSupported) || $rawSupported === '') {
-            $supported = array_values(array_diff(self::known(), [$current]));
-            \Configuration::updateValue(self::KEY_SUPPORTED, (string) json_encode($supported));
+            \Configuration::updateValue(self::KEY_SUPPORTED, (string) json_encode(self::DEFAULT_SUPPORTED));
         }
-    }
-
-    public static function currentForInstalledVersion(string $installedVersion): string
-    {
-        return $installedVersion !== '' && version_compare($installedVersion, self::FIRST_LATEST_RELEASE, '>=')
-            ? self::LATEST
-            : self::PRE_REGISTRY_CURRENT;
     }
 
     public static function deleteConfiguration(): void
