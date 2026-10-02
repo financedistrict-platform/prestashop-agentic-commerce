@@ -149,9 +149,11 @@ The store speaks three UCP versions. Set them under **Modules → Finance Distri
 
 | Setting | Configuration key | Default | Meaning |
 |---------|-------------------|---------|---------|
-| Current UCP version | `FDPSUCP_UCP_VERSION` | `2026-04-08` | Served at `/.well-known/ucp` and to agents that do not declare a version. Same bytes as module 0.5.3. |
-| Also supported versions | `FDPSUCP_UCP_SUPPORTED_VERSIONS` (JSON list) | `["2026-08-25","2026-01-23"]` | Extra versions an agent may pick. Each one has a leaf profile at `/.well-known/ucp/{version}` and is listed in the root profile under `ucp.supported_versions`. |
+| Current UCP version | `FDPSUCP_UCP_VERSION` | latest (`2026-08-25`) | Served at `/.well-known/ucp` and to agents that do not declare a version. |
+| Also supported versions | `FDPSUCP_UCP_SUPPORTED_VERSIONS` (JSON list) | `["2026-04-08","2026-01-23"]` | Extra versions an agent may pick. Each one has a leaf profile at `/.well-known/ucp/{version}` and is listed in the root profile under `ucp.supported_versions`. |
 | Version negotiation | `FDPSUCP_UCP_NEGOTIATION` | `lenient` | How to treat an agent whose profile cannot be used (see below). |
+
+A fresh install starts on the latest version and writes both settings, so a later module update never moves a running store. A store upgraded from a release before 0.7.0 keeps `2026-04-08` (the bytes module 0.5.3 served) and lists `2026-08-25` and `2026-01-23` as supported; a store upgraded from 0.6.0 keeps `2026-08-25`. Change the current version in the settings to move. Uninstalling the module deletes these settings.
 
 An agent picks a version by sending `UCP-Agent: profile="https://…"`. The module fetches that profile (HTTPS only, public IPs only, 3 s timeout, 64 KiB cap, no redirects, cached 10 minutes) and reads `ucp.version`:
 
