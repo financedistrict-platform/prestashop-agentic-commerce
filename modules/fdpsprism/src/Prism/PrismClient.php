@@ -30,7 +30,7 @@ class PrismClient
      */
     public function fetchUcpHandlers(string $ucpVersion): ?array
     {
-        return $this->request('GET', '/api/v2/merchant/ucp/handlers?ucp_version=' . rawurlencode($ucpVersion), null, 15);
+        return $this->request('GET', '/api/v2/merchant/ucp/handlers', null, 15, $ucpVersion);
     }
 
     /**
@@ -39,7 +39,7 @@ class PrismClient
      *
      * @return array<string,mixed>|null
      */
-    public function prepareUcpPayment(string $amount, string $currency, string $resourceUrl, string $description): ?array
+    public function prepareUcpPayment(string $amount, string $currency, string $resourceUrl, string $description, string $ucpVersion): ?array
     {
         return $this->request('POST', '/api/v2/merchant/ucp/payment-requirements', [
             'amount' => $amount,
@@ -48,7 +48,7 @@ class PrismClient
                 'url' => $resourceUrl,
                 'description' => $description,
             ],
-        ], 30);
+        ], 30, $ucpVersion);
     }
 
     /**
@@ -57,7 +57,7 @@ class PrismClient
      * @param array<string,mixed> $x402Authorization
      * @return array<string,mixed>|null
      */
-    public function settle(array $x402Authorization): ?array
+    public function settle(array $x402Authorization, string $ucpVersion): ?array
     {
         $version = (int) ($x402Authorization['x402Version']
             ?? $x402Authorization['paymentPayload']['x402Version'] ?? 2);
@@ -66,7 +66,7 @@ class PrismClient
             'paymentRequirements' => $x402Authorization['paymentRequirements'] ?? null,
         ];
 
-        return $this->request('POST', "/api/v{$version}/payment/settle", $body, 30);
+        return $this->request('POST', "/api/v{$version}/payment/settle", $body, 30, $ucpVersion);
     }
 
     /**
@@ -75,23 +75,23 @@ class PrismClient
      * @param array<string,mixed> $x402Authorization
      * @return array<string,mixed>|null
      */
-    public function verify(array $x402Authorization): ?array
+    public function verify(array $x402Authorization, string $ucpVersion): ?array
     {
         $version = (int) ($x402Authorization['x402Version'] ?? 2);
 
-        return $this->request('POST', "/api/v{$version}/payment/verify", $x402Authorization, 30);
+        return $this->request('POST', "/api/v{$version}/payment/verify", $x402Authorization, 30, $ucpVersion);
+    }
+
+    public static function userAgent(string $ucpVersion): string
+    {
+        return 'fd-prestashop-prism/' . $ucpVersion;
     }
 
     /**
      * @param array<string,mixed>|null $body
      * @return array<string,mixed>|null
      */
-    public function userAgent(): string
-    {
-        return 'fd-prestashop-prism/' . \FdPsPrism::VERSION;
-    }
-
-    protected function request(string $method, string $path, ?array $body, int $timeout): ?array
+    protected function request(string $method, string $path, ?array $body, int $timeout, string $ucpVersion): ?array
     {
         if (!function_exists('curl_init')) {
             \PrestaShopLogger::addLog("[FD Prism] cURL unavailable for $method $path", 3);
@@ -109,7 +109,7 @@ class PrismClient
             CURLOPT_CUSTOMREQUEST => $method,
             CURLOPT_RETURNTRANSFER => true,
             CURLOPT_HTTPHEADER => $headers,
-            CURLOPT_USERAGENT => $this->userAgent(),
+            CURLOPT_USERAGENT => self::userAgent($ucpVersion),
             CURLOPT_TIMEOUT => $timeout,
             CURLOPT_CONNECTTIMEOUT => 10,
             // Explicit TLS verification — the API key travels on this connection.

@@ -15,6 +15,14 @@ class Wire20260825 extends WireBase
         return self::VERSION;
     }
 
+    protected function profileCapabilities(string $base): array
+    {
+        $capabilities = parent::profileCapabilities($base);
+        $capabilities['dev.ucp.shopping.fulfillment'][0]['extends'] = ['dev.ucp.shopping.checkout'];
+
+        return $capabilities;
+    }
+
     protected function errorSeverity(): string
     {
         return 'unrecoverable';

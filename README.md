@@ -155,18 +155,18 @@ The store speaks three UCP versions. Set them under **Modules → Finance Distri
 
 Install and upgrade both start on the latest version when no version is stored, and write both settings, so a later module update never moves a running store. Agents that declare `2026-04-08` or `2026-01-23` are still served in their version. Change the current version in the settings to move. Uninstalling the module deletes these settings.
 
-An agent picks a version by sending `UCP-Agent: profile="https://…"`. The module fetches that profile (HTTPS only, public IPs only, 3 s timeout, 64 KiB cap, no redirects, cached 10 minutes) and reads `ucp.version`:
+An agent picks a version by sending `UCP-Agent: profile="https://…"`. The module fetches that profile (HTTPS only, public IPs only, 3 s timeout, 128 KiB cap, no redirects, cached 10 minutes) and reads `ucp.version`:
 
 | Agent profile | `lenient` (default) | `strict` |
 |---------------|---------------------|----------|
 | No `UCP-Agent` header | current version, as before | same |
-| Unreachable, not HTTPS, private host, too large, timeout | current version + warning log | `424 agent_profile_unavailable` |
-| No or malformed `ucp.version` | current version + warning log | `422 version_unsupported` |
-| Unknown version date | current version + warning log | `422 version_unsupported` |
+| Unreachable, not HTTPS, private host, too large, timeout | current version + warning log | `424 profile_unreachable` |
+| No or malformed `ucp.version` | current version + warning log | `422 profile_malformed` |
+| Unknown version date | `422 version_unsupported` | `422 version_unsupported` |
 | Known version, disabled in settings | `422 version_unsupported` | same |
 | Enabled version | that version | same |
 
-`lenient` is a deliberate deviation from the UCP spec, which tells a business to reject an agent it cannot negotiate with. It keeps agents written for 0.5.3 working; pick `strict` to follow the spec to the letter.
+`lenient` is a deliberate deviation from the UCP spec, which tells a business to reject an agent it cannot negotiate with. It only covers profiles that cannot be read or declare no version. It keeps agents written for 0.5.3 working; pick `strict` to follow the spec to the letter.
 
 A checkout session or cart remembers the version its agent declared at creation. A later call that declares a different enabled version gets `422 version_unsupported`; a later call whose profile cannot be read keeps the stored version. Version `2026-01-23` has no cart or catalog, so those routes answer `404 capabilities_incompatible` in that version. Every resolution fires the `actionFdUcpProfileResolution` hook with `outcome`, `version` and `host`.
 

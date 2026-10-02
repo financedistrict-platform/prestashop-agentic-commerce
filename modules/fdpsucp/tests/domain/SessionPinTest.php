@@ -23,9 +23,9 @@ final class SessionPinTest extends TestCase
         $this->assertSame('unreachable', $context->outcome());
     }
 
-    public function test_pinned_session_with_undeclared_or_unknown_profile_keeps_its_version(): void
+    public function test_pinned_session_with_undeclared_profile_keeps_its_version(): void
     {
-        foreach ([null, '2026-01-11'] as $declared) {
+        foreach ([null] as $declared) {
             FdTestStubs::reset();
             $context = VersionResolverTest::resolveWith(FdTestFixtureProfileFetcher::declaring($declared), 'lenient', FdTestLegacyVersionStore::SUPPORTED, '2026-08-25');
 
@@ -34,12 +34,21 @@ final class SessionPinTest extends TestCase
         }
     }
 
+    public function test_pinned_session_with_unknown_profile_is_rejected(): void
+    {
+        $context = VersionResolverTest::resolveWith(FdTestFixtureProfileFetcher::declaring('2026-01-11'), 'lenient', FdTestLegacyVersionStore::SUPPORTED, '2026-08-25');
+
+        $this->assertSame(422, $context->rejection()['status']);
+        $this->assertSame('version_unsupported', $context->rejection()['code']);
+    }
+
     public function test_pinned_session_with_matched_different_version_is_rejected(): void
     {
         $context = VersionResolverTest::resolveWith(FdTestFixtureProfileFetcher::declaring('2026-04-08'), 'lenient', FdTestLegacyVersionStore::SUPPORTED, '2026-08-25');
 
         $this->assertSame(422, $context->rejection()['status']);
         $this->assertSame('version_unsupported', $context->rejection()['code']);
+        $this->assertSame('This session is bound to UCP version 2026-08-25; the agent profile now declares 2026-04-08.', $context->rejection()['message']);
     }
 
     public function test_pinned_session_with_matched_same_version_is_served(): void
