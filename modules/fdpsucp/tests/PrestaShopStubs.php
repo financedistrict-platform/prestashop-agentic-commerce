@@ -72,7 +72,6 @@ class Module
 
 class Db
 {
-    public static string $installedVersion = '';
     public static array $statements = [];
 
     public static function getInstance(): self
@@ -94,7 +93,7 @@ class Db
 
     public function getValue($sql)
     {
-        return self::$installedVersion === '' ? false : self::$installedVersion;
+        return false;
     }
 }
 
@@ -151,7 +150,6 @@ final class FdTestStubs
         Configuration::$values = [];
         Hook::$calls = [];
         Module::$hooks = [];
-        Db::$installedVersion = '';
         Db::$statements = [];
         PrestaShopLogger::$logs = [];
         \FD\PrismUcp\Ucp\RequestContext::set(null);
