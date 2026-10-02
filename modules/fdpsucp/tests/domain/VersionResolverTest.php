@@ -20,11 +20,11 @@ final class VersionResolverTest extends TestCase
     public static function resolveWith(
         ?string $body,
         string $negotiation = 'lenient',
-        array $supported = VersionRegistry::DEFAULT_SUPPORTED,
+        array $supported = FdTestUpgradedStore::SUPPORTED,
         ?string $pinned = null,
         ?string $header = null
     ): RequestContext {
-        $versions = new VersionRegistry(VersionRegistry::DEFAULT_CURRENT, $supported, $negotiation);
+        $versions = new VersionRegistry(FdTestUpgradedStore::CURRENT, $supported, $negotiation);
         $fetcher = new FdTestFixtureProfileFetcher($body === null ? [] : [self::PROFILE => $body]);
 
         return (new VersionResolver($versions, $fetcher))->resolve($header ?? 'profile="' . self::PROFILE . '"', $pinned);
@@ -68,7 +68,7 @@ final class VersionResolverTest extends TestCase
     public function test_missing_header_keeps_todays_behaviour(): void
     {
         $fetcher = new FdTestFixtureProfileFetcher([]);
-        $context = (new VersionResolver(new VersionRegistry(), $fetcher))->resolve(null);
+        $context = (new VersionResolver(FdTestUpgradedStore::registry(), $fetcher))->resolve(null);
 
         $this->assertSame('none', $context->outcome());
         $this->assertSame('2026-04-08', $context->version());
@@ -77,7 +77,7 @@ final class VersionResolverTest extends TestCase
 
     public function test_header_without_profile_keeps_todays_behaviour(): void
     {
-        $context = self::resolveWith(null, 'strict', VersionRegistry::DEFAULT_SUPPORTED, null, 'agent-a/1.0');
+        $context = self::resolveWith(null, 'strict', FdTestUpgradedStore::SUPPORTED, null, 'agent-a/1.0');
 
         $this->assertSame('none', $context->outcome());
         $this->assertNull($context->rejection());

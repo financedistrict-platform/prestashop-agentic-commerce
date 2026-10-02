@@ -50,6 +50,7 @@ class FdPsUcp extends Module
         return parent::install()
             && $this->installDb()
             && $this->ensureAgentToken()
+            && $this->seedVersionSettings()
             && $this->registerHook('actionUcpCollectPaymentHandlers')
             && $this->registerHook('moduleRoutes')
             && $this->installHtaccessRules();
@@ -136,6 +137,13 @@ class FdPsUcp extends Module
         if ((string) Configuration::get('FDPSUCP_AGENT_TOKEN') === '') {
             Configuration::updateValue('FDPSUCP_AGENT_TOKEN', bin2hex(random_bytes(32)));
         }
+
+        return true;
+    }
+
+    private function seedVersionSettings(): bool
+    {
+        VersionRegistry::seedOnInstall();
 
         return true;
     }
@@ -252,6 +260,7 @@ class FdPsUcp extends Module
     public function uninstall(): bool
     {
         $this->removeHtaccessRules();
+        VersionRegistry::deleteConfiguration();
 
         return $this->uninstallDb() && parent::uninstall();
     }

@@ -9,7 +9,6 @@ use FD\PrismUcp\Payment\PaymentHandlerInterface;
 use FD\PrismUcp\Payment\PaymentRegistry;
 use FD\PrismUcp\Ucp\SessionRepository;
 use FD\PrismUcp\Ucp\VersionPin;
-use FD\PrismUcp\Ucp\VersionRegistry;
 use FD\PrismUcp\Ucp\VersionResolver;
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
@@ -25,6 +24,7 @@ final class BackCompatOriginalAgentTest extends TestCase
     protected function setUp(): void
     {
         FdTestStubs::reset();
+        FdTestUpgradedStore::seed();
 
         $session = FdTestGoldenRenderer::input('checkout-session.json');
         $session['ucp_version'] = null;
@@ -121,7 +121,7 @@ final class BackCompatOriginalAgentTest extends TestCase
     {
         $this->sessions->rows[self::SESSION_ID]['ucp_version'] = '2026-08-25';
         $pin = new VersionPin(
-            new VersionResolver(new VersionRegistry(), new FdTestFixtureProfileFetcher(['https://agent.example/p' => FdTestFixtureProfileFetcher::declaring('2026-04-08')])),
+            new VersionResolver(FdTestUpgradedStore::registry(), new FdTestFixtureProfileFetcher(['https://agent.example/p' => FdTestFixtureProfileFetcher::declaring('2026-04-08')])),
             'profile="https://agent.example/p"'
         );
 
@@ -134,7 +134,7 @@ final class BackCompatOriginalAgentTest extends TestCase
     public function test_pinned_session_is_served_in_its_version_on_a_fallback_outcome(): void
     {
         $this->sessions->rows[self::SESSION_ID]['ucp_version'] = '2026-08-25';
-        $pin = new VersionPin(new VersionResolver(new VersionRegistry(), new FdTestFixtureProfileFetcher([])), 'profile="https://agent.example/p"');
+        $pin = new VersionPin(new VersionResolver(FdTestUpgradedStore::registry(), new FdTestFixtureProfileFetcher([])), 'profile="https://agent.example/p"');
 
         $response = $this->service($pin)->get(self::SESSION_ID);
 

@@ -30,12 +30,12 @@ final class RegistryConfigTest extends TestCase
         );
     }
 
-    public function test_defaults_serve_the_original_version_and_enable_all_three(): void
+    public function test_defaults_serve_the_latest_version_and_enable_all_three(): void
     {
         $versions = VersionRegistry::fromConfiguration();
 
-        $this->assertSame('2026-04-08', $versions->current());
-        $this->assertSame(['2026-04-08', '2026-08-25', '2026-01-23'], $versions->enabled());
+        $this->assertSame('2026-08-25', $versions->current());
+        $this->assertSame(['2026-08-25', '2026-04-08', '2026-01-23'], $versions->enabled());
         $this->assertSame('lenient', $versions->negotiation());
         $this->assertNull($versions->assertValid());
     }
@@ -80,14 +80,14 @@ final class RegistryConfigTest extends TestCase
 
         $this->assertSame(500, $response->status);
         $this->assertSame('configuration_invalid', $response->body['messages'][0]['code']);
-        $this->assertSame('2026-04-08', $response->body['ucp']['version']);
+        $this->assertSame('2026-08-25', $response->body['ucp']['version']);
     }
 
     public function test_disabled_version_request_is_rejected_by_the_router(): void
     {
         Configuration::$values[VersionRegistry::KEY_SUPPORTED] = '[]';
 
-        $response = $this->router($this->resolverDeclaring('2026-08-25'))->dispatch('POST', 'checkout-sessions', [], ['ucp-agent' => self::AGENT]);
+        $response = $this->router($this->resolverDeclaring('2026-04-08'))->dispatch('POST', 'checkout-sessions', [], ['ucp-agent' => self::AGENT]);
 
         $this->assertSame(422, $response->status);
         $this->assertSame('version_unsupported', $response->body['messages'][0]['code']);

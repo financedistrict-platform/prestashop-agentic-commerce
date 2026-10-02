@@ -50,6 +50,57 @@ class PrestaShopLogger
 
 class Module
 {
+    public static array $hooks = [];
+
+    public function install(): bool
+    {
+        return true;
+    }
+
+    public function uninstall(): bool
+    {
+        return true;
+    }
+
+    public function registerHook($hook): bool
+    {
+        self::$hooks[] = $hook;
+
+        return true;
+    }
+}
+
+class Db
+{
+    public static string $installedVersion = '';
+    public static array $statements = [];
+
+    public static function getInstance(): self
+    {
+        return new self();
+    }
+
+    public function execute($sql): bool
+    {
+        self::$statements[] = $sql;
+
+        return true;
+    }
+
+    public function executeS($sql): array
+    {
+        return [['Field' => 'ucp_version']];
+    }
+
+    public function getValue($sql)
+    {
+        return self::$installedVersion === '' ? false : self::$installedVersion;
+    }
+}
+
+function bqSQL($value): string
+{
+    return (string) $value;
 }
 
 class PaymentModule extends Module
@@ -99,6 +150,9 @@ final class FdTestStubs
     {
         Configuration::$values = [];
         Hook::$calls = [];
+        Module::$hooks = [];
+        Db::$installedVersion = '';
+        Db::$statements = [];
         PrestaShopLogger::$logs = [];
         \FD\PrismUcp\Ucp\RequestContext::set(null);
         \FD\PrismUcp\Ucp\AgentProfileFetcher::resetCache();

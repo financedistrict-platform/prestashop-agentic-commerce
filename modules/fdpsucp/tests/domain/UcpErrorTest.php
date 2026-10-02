@@ -21,6 +21,7 @@ final class UcpErrorTest extends TestCase
 
     public function test_error_response_structure(): void
     {
+        FdTestUpgradedStore::seed();
         $response = UcpError::response('test_code', 'Something went wrong', 422);
 
         $this->assertSame(422, $response->status);

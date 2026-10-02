@@ -15,5 +15,8 @@ function upgrade_module_0_7_0($module)
         }
     }
 
+    $installed = (string) $db->getValue('SELECT `version` FROM `' . _DB_PREFIX_ . 'module` WHERE `name` = \'fdpsucp\'');
+    \FD\PrismUcp\Ucp\VersionRegistry::seedOnUpgrade($installed);
+
     return $module->installHtaccessRules();
 }
