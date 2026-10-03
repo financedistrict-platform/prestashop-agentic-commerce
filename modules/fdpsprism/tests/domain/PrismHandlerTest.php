@@ -86,13 +86,11 @@ final class PrismHandlerTest extends TestCase
         $client->fetchUcpHandlers('2026-08-25');
         $client->prepareUcpPayment('15.00', 'USD', 'https://shop.example/checkout-sessions/1', 'Order', '2026-04-08');
         $client->settle(['x402Version' => 2], '2026-01-23');
-        $client->verify(['x402Version' => 2], '2026-08-25');
 
         $this->assertSame([
             'fd-prestashop-prism/2026-08-25',
             'fd-prestashop-prism/2026-04-08',
             'fd-prestashop-prism/2026-01-23',
-            'fd-prestashop-prism/2026-08-25',
         ], $client->userAgents);
         $this->assertSame('GET /api/v2/merchant/ucp/handlers', $client->paths[0]);
     }

@@ -21,7 +21,7 @@ use FD\PrismPayment\Prism\PrismHandler;
 
 class FdPsPrism extends PaymentModule
 {
-    public const VERSION = '0.7.2';
+    public const VERSION = '0.7.3';
 
     public function __construct()
     {
