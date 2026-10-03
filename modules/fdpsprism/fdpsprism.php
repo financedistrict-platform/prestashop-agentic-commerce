@@ -17,11 +17,10 @@ if (!defined('_PS_VERSION_')) {
 require_once __DIR__ . '/src/autoload.php';
 
 use FD\PrismPayment\Config\ConfigResolver;
-use FD\PrismPayment\Prism\PrismHandler;
 
 class FdPsPrism extends PaymentModule
 {
-    public const VERSION = '0.7.3';
+    public const VERSION = '0.7.4';
 
     public function __construct()
     {
@@ -101,7 +100,7 @@ class FdPsPrism extends PaymentModule
         }
         require_once __DIR__ . '/src/Prism/PrismHandler.php';
         foreach (\FD\PrismUcp\Ucp\VersionRegistry::known() as $ucpVersion) {
-            Configuration::deleteByName(PrismHandler::cacheKey($gateway, $ucpVersion));
+            Configuration::deleteByName(\FD\PrismPayment\Prism\PrismHandler::cacheKey($gateway, $ucpVersion));
         }
     }
 
