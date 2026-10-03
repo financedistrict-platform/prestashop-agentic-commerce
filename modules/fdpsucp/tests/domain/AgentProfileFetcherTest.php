@@ -17,6 +17,7 @@ final class AgentProfileFetcherTest extends TestCase
     {
         return new class($ips, $body, $loopback) extends AgentProfileFetcher {
             public static array $requests = [];
+            public static int $resolutions = 0;
 
             public function __construct(private array $ips, private array|string|null $body, bool $loopback)
             {
@@ -25,6 +26,7 @@ final class AgentProfileFetcherTest extends TestCase
 
             protected function resolveHost(string $host): array
             {
+                self::$resolutions++;
                 return $this->ips;
             }
 
@@ -183,6 +185,16 @@ final class AgentProfileFetcherTest extends TestCase
         $this->assertSame('agent.example', $fetcher::$requests[1]['host']);
         $this->assertGreaterThan(0, $fetcher::$requests[1]['timeoutMs']);
         $this->assertLessThanOrEqual(AgentProfileFetcher::TIMEOUT * 1000, $fetcher::$requests[1]['timeoutMs']);
+    }
+
+    public function test_same_origin_hop_does_not_resolve_the_host_again(): void
+    {
+        $fetcher = $this->fetcher(['93.184.216.34'], [$this->redirect(301, 'https://store.example/p/'), $this->declaring('2026-01-23')]);
+        $fetcher::$resolutions = 0;
+
+        $fetcher->lookup('https://store.example/p');
+
+        $this->assertSame(1, $fetcher::$resolutions);
     }
 
     public function test_mixed_case_same_origin_location_is_followed_on_the_pinned_host(): void

@@ -22,7 +22,7 @@ class FdPsUcp extends Module
 {
     public const UCP_VERSION = VersionRegistry::DEFAULT_CURRENT;
 
-    public const VERSION = '0.7.3';
+    public const VERSION = '0.7.4';
 
     public function __construct()
     {
@@ -176,7 +176,7 @@ class FdPsUcp extends Module
         $token = (string) Configuration::get('FDPSUCP_AGENT_TOKEN');
         $tokenHtml = htmlspecialchars($token, ENT_QUOTES, 'UTF-8');
 
-        $intro = $this->trans('Agents must send this token on every request to the shopping endpoints (discovery and catalog aside):', [], 'Modules.Fdpsucp.Admin');
+        $intro = $this->trans('Agents must send this token on every request to the shopping endpoints:', [], 'Modules.Fdpsucp.Admin');
         $header = $this->trans('Authorization: Bearer <token>', [], 'Modules.Fdpsucp.Admin');
         $warn = $this->trans('Keep this secret. Anyone with it can create checkout sessions against your store.', [], 'Modules.Fdpsucp.Admin');
         $regen = $this->trans('Regenerate token', [], 'Modules.Fdpsucp.Admin');

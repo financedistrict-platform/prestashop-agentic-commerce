@@ -19,6 +19,7 @@
 use FD\PrismUcp\Http\Response;
 use FD\PrismUcp\Payment\PaymentRegistry;
 use FD\PrismUcp\Router;
+use FD\PrismUcp\Support\AgentTokenGate;
 use FD\PrismUcp\Support\RateLimiter;
 use FD\PrismUcp\Ucp\UcpError;
 
@@ -40,9 +41,8 @@ class FdPsUcpApiModuleFrontController extends ModuleFrontController
         $headers = $this->readHeaders();
         $method = $_SERVER['REQUEST_METHOD'] ?? 'GET';
 
-        // --- Auth (NFR-5): if a token is configured, require it. ---
         $configuredToken = (string) Configuration::get('FDPSUCP_AGENT_TOKEN');
-        if ($configuredToken !== '' && !$this->tokenMatches($headers, $configuredToken)) {
+        if (!AgentTokenGate::allows($configuredToken, $headers)) {
             $this->emit(UcpError::response('unauthorized', 'Missing or invalid agent token', 401));
         }
 
@@ -114,18 +114,5 @@ class FdPsUcpApiModuleFrontController extends ModuleFrontController
             }
         }
         return $headers;
-    }
-
-    /** @param array<string,string> $headers */
-    private function tokenMatches(array $headers, string $token): bool
-    {
-        $auth = $headers['authorization'] ?? '';
-        if (stripos($auth, 'bearer ') === 0) {
-            return hash_equals($token, trim(substr($auth, 7)));
-        }
-        if (isset($headers['ucp-agent-token'])) {
-            return hash_equals($token, $headers['ucp-agent-token']);
-        }
-        return false;
     }
 }

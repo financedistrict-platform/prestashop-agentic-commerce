@@ -179,13 +179,13 @@ Payment instruments from 0.5.3-era agents still complete: `handler_id` `x402` or
 
 Two layers protect the shopping endpoints:
 
-**1. Agent token (who may transact).** On install the module generates a random `FDPSUCP_AGENT_TOKEN`. View or regenerate it under **Modules → Finance District UCP → Configure**. Agents must send it on every request to the write/PII endpoints:
+**1. Agent token (who may transact).** On install the module generates a random `FDPSUCP_AGENT_TOKEN`. View or regenerate it under **Modules → Finance District UCP → Configure**. Agents must send it on every request to the shopping endpoints:
 
 ```
 Authorization: Bearer <token>
 ```
 
-Discovery (`/.well-known/ucp`) and catalog stay reachable so agents can find and browse the store. Regenerating the token immediately invalidates the old one.
+Discovery (`/.well-known/ucp`) stays reachable so agents can find the store. If `FDPSUCP_AGENT_TOKEN` is empty, every shopping endpoint answers `401` until a token is generated, so an empty token never opens the API. Regenerating the token immediately invalidates the old one.
 
 **2. Session secret (which session is yours).** Creating a cart or checkout session returns a one-time secret in the response body — `cart_secret` for a cart, `session_secret` for a checkout session. **Store it and send it back on every later call to that resource**, or the call is rejected:
 
