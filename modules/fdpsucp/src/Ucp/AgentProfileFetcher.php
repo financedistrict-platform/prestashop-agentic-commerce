@@ -214,16 +214,18 @@ class AgentProfileFetcher
 
     private function sameOrigin(string $location, array $origin): bool
     {
-        if ($location === '' || strtolower((string) parse_url($location, PHP_URL_HOST)) !== $origin['host']) {
+        if ($location === '') {
             return false;
         }
+        $parts = parse_url($location);
+        if (!is_array($parts) || isset($parts['user']) || isset($parts['pass'])) {
+            return false;
+        }
+        $scheme = strtolower($parts['scheme'] ?? '');
 
-        $hop = $this->validatedTarget($location);
-
-        return $hop !== null
-            && $hop['scheme'] === $origin['scheme']
-            && $hop['host'] === $origin['host']
-            && $hop['port'] === $origin['port'];
+        return $scheme === $origin['scheme']
+            && strtolower($parts['host'] ?? '') === $origin['host']
+            && (int) ($parts['port'] ?? ($scheme === 'https' ? 443 : 80)) === $origin['port'];
     }
 
     private function validatedTarget(string $url): ?array
