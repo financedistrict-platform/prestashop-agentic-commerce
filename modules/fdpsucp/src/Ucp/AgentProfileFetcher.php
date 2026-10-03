@@ -109,9 +109,9 @@ class AgentProfileFetcher
         }
 
         if (self::isRedirect($response)) {
-            $location = self::withoutFragment($response['location']);
+            $location = self::withoutFragment(self::withoutControlCharacters($response['location']));
             if (!$this->sameOrigin($location, $target)) {
-                return self::redirected($location);
+                return self::redirected($location, $url);
             }
             $remaining = (int) (($deadline - microtime(true)) * 1000);
             if ($remaining <= 0) {
@@ -122,7 +122,7 @@ class AgentProfileFetcher
                 return ['failed' => true];
             }
             if (self::isRedirect($response)) {
-                return self::redirected(self::withoutFragment($response['location']));
+                return self::redirected($response['location'], $location);
             }
         }
 
@@ -155,13 +155,56 @@ class AgentProfileFetcher
         return $hash === false ? $location : substr($location, 0, $hash);
     }
 
-    private static function redirected(string $location): array
+    private static function withoutControlCharacters(string $value): string
+    {
+        return (string) preg_replace('/[\x00-\x1f\x7f]/', '', $value);
+    }
+
+    private static function redirected(string $location, string $base): array
     {
         return [
             'failed' => true,
             'reason' => 'redirected',
-            'location' => $location === '' ? null : substr($location, 0, self::MAX_LOCATION),
+            'location' => self::reportable($location, $base),
         ];
+    }
+
+    private static function reportable(string $location, string $base): ?string
+    {
+        $parts = parse_url(self::resolved(self::withoutControlCharacters($location), $base));
+        if (!is_array($parts) || ($parts['scheme'] ?? '') === '' || ($parts['host'] ?? '') === '') {
+            return null;
+        }
+
+        $reported = $parts['scheme'] . '://' . $parts['host']
+            . (isset($parts['port']) ? ':' . $parts['port'] : '')
+            . ($parts['path'] ?? '')
+            . (isset($parts['query']) ? '?' . $parts['query'] : '');
+
+        return substr($reported, 0, self::MAX_LOCATION);
+    }
+
+    private static function resolved(string $location, string $base): string
+    {
+        if ($location === '' || preg_match('#^[a-z][a-z0-9+.-]*:#i', $location)) {
+            return $location;
+        }
+
+        $parts = parse_url($base);
+        if (!is_array($parts) || !isset($parts['scheme'], $parts['host'])) {
+            return $location;
+        }
+        $origin = $parts['scheme'] . ':';
+        if (str_starts_with($location, '//')) {
+            return $origin . $location;
+        }
+        $origin .= '//' . $parts['host'] . (isset($parts['port']) ? ':' . $parts['port'] : '');
+        if (str_starts_with($location, '/')) {
+            return $origin . $location;
+        }
+        $path = $parts['path'] ?? '/';
+
+        return $origin . substr($path, 0, (int) strrpos($path, '/') + 1) . $location;
     }
 
     private function sameOrigin(string $location, array $origin): bool

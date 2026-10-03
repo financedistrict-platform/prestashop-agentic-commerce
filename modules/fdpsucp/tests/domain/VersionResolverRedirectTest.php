@@ -68,6 +68,18 @@ final class VersionResolverRedirectTest extends TestCase
         }
     }
 
+    public function test_userinfo_never_reaches_the_message_or_the_log(): void
+    {
+        $context = $this->resolve($this->redirect(301, 'https://user:secret@other.example/p'));
+
+        $this->assertSame('Agent profile URL redirects to https://other.example/p; use the final URL.', $context->rejection()['message']);
+        $this->assertStringContainsString('location=https://other.example/p', PrestaShopLogger::$logs[0]['message']);
+        foreach ([$context->rejection()['message'], PrestaShopLogger::$logs[0]['message']] as $text) {
+            $this->assertStringNotContainsString('secret', $text);
+            $this->assertStringNotContainsString('user@', $text);
+        }
+    }
+
     public function test_missing_location_uses_the_short_message(): void
     {
         $context = $this->resolve($this->redirect(302, null));

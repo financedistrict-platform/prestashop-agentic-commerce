@@ -199,7 +199,6 @@ final class AgentProfileFetcherTest extends TestCase
             'cross origin' => ['https://other.example/p'],
             'other port' => ['https://agent.example:8443/p'],
             'downgrade' => ['http://agent.example/p'],
-            'userinfo' => ['https://user:pw@agent.example/p'],
         ];
     }
 
@@ -213,6 +212,37 @@ final class AgentProfileFetcherTest extends TestCase
 
         $this->assertSame(['failed' => true, 'reason' => 'redirected', 'location' => $location], $result);
         $this->assertCount(1, $fetcher::$requests);
+    }
+
+    public function test_userinfo_is_never_reported(): void
+    {
+        $result = $this->fetcher(['93.184.216.34'], [$this->redirect(301, "https://user:secret@other.example:8443/p?a=1#frag\n")])->lookup('https://agent.example/p');
+
+        $this->assertSame(['failed' => true, 'reason' => 'redirected', 'location' => 'https://other.example:8443/p?a=1'], $result);
+    }
+
+    public function test_same_origin_userinfo_is_rejected_without_leaking(): void
+    {
+        $result = $this->fetcher(['93.184.216.34'], [$this->redirect(301, 'https://user:secret@agent.example/p/')])->lookup('https://agent.example/p');
+
+        $this->assertSame('https://agent.example/p/', $result['location']);
+    }
+
+    public function test_location_without_host_is_reported_as_null(): void
+    {
+        $result = $this->fetcher(['93.184.216.34'], [$this->redirect(301, 'mailto:x')])->lookup('https://agent.example/p');
+
+        $this->assertNull($result['location']);
+    }
+
+    public function test_relative_second_location_is_resolved_against_the_hop(): void
+    {
+        $fetcher = $this->fetcher(['93.184.216.34'], [
+            $this->redirect(301, 'https://agent.example/a/p/'),
+            $this->redirect(301, 'q'),
+        ]);
+
+        $this->assertSame('https://agent.example/a/p/q', $fetcher->lookup('https://agent.example/p')['location']);
     }
 
     public function test_missing_location_is_reported_as_null(): void
