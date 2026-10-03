@@ -13,6 +13,8 @@ class AgentProfileFetcher
     public const CACHE_PREFIX = 'fdpsucp_profile_';
     public const MAX_BYTES = 131072;
     public const TIMEOUT = 3;
+    public const MAX_LOCATION = 512;
+    public const REDIRECT_CODES = [301, 302, 303, 307, 308];
 
     private static array $lru = [];
 
@@ -100,12 +102,35 @@ class AgentProfileFetcher
             return ['failed' => true];
         }
 
-        $body = $this->request($url, $target['host'], $target['port'], $target['ip'], $target['scheme']);
-        if ($body === null || strlen($body) > self::MAX_BYTES) {
+        $deadline = microtime(true) + self::TIMEOUT;
+        $response = $this->request($url, $target['host'], $target['port'], $target['ip'], $target['scheme'], self::TIMEOUT * 1000);
+        if ($response === null) {
             return ['failed' => true];
         }
 
-        $profile = json_decode($body, true);
+        if (self::isRedirect($response)) {
+            $location = self::withoutFragment($response['location']);
+            if (!$this->sameOrigin($location, $target)) {
+                return self::redirected($location);
+            }
+            $remaining = (int) (($deadline - microtime(true)) * 1000);
+            if ($remaining <= 0) {
+                return ['failed' => true];
+            }
+            $response = $this->request($location, $target['host'], $target['port'], $target['ip'], $target['scheme'], $remaining);
+            if ($response === null) {
+                return ['failed' => true];
+            }
+            if (self::isRedirect($response)) {
+                return self::redirected(self::withoutFragment($response['location']));
+            }
+        }
+
+        if ($response['code'] !== 200 || strlen($response['body']) > self::MAX_BYTES) {
+            return ['failed' => true];
+        }
+
+        $profile = json_decode($response['body'], true);
         if (!is_array($profile)) {
             return ['failed' => true];
         }
@@ -116,6 +141,41 @@ class AgentProfileFetcher
             'version' => is_string($version) && preg_match('/^\d{4}-\d{2}-\d{2}$/', $version) ? $version : null,
             'fetched_at' => time(),
         ];
+    }
+
+    private static function isRedirect(array $response): bool
+    {
+        return in_array($response['code'], self::REDIRECT_CODES, true);
+    }
+
+    private static function withoutFragment(string $location): string
+    {
+        $hash = strpos($location, '#');
+
+        return $hash === false ? $location : substr($location, 0, $hash);
+    }
+
+    private static function redirected(string $location): array
+    {
+        return [
+            'failed' => true,
+            'reason' => 'redirected',
+            'location' => $location === '' ? null : substr($location, 0, self::MAX_LOCATION),
+        ];
+    }
+
+    private function sameOrigin(string $location, array $origin): bool
+    {
+        if ($location === '' || strtolower((string) parse_url($location, PHP_URL_HOST)) !== $origin['host']) {
+            return false;
+        }
+
+        $hop = $this->validatedTarget($location);
+
+        return $hop !== null
+            && $hop['scheme'] === $origin['scheme']
+            && $hop['host'] === $origin['host']
+            && $hop['port'] === $origin['port'];
     }
 
     private function validatedTarget(string $url): ?array
@@ -163,15 +223,15 @@ class AgentProfileFetcher
         return is_array($ips) ? $ips : [];
     }
 
-    public function curlOptions(string $host, int $port, string $ip, string $scheme, \Closure $sink): array
+    public function curlOptions(string $host, int $port, string $ip, string $scheme, \Closure $sink, int $timeoutMs = self::TIMEOUT * 1000): array
     {
         $pinned = str_contains($ip, ':') ? '[' . $ip . ']' : $ip;
 
         return [
             CURLOPT_PROTOCOLS => $scheme === 'http' ? CURLPROTO_HTTP : CURLPROTO_HTTPS,
             CURLOPT_RESOLVE => ["$host:$port:$pinned"],
-            CURLOPT_TIMEOUT => self::TIMEOUT,
-            CURLOPT_CONNECTTIMEOUT => self::TIMEOUT,
+            CURLOPT_TIMEOUT_MS => $timeoutMs,
+            CURLOPT_CONNECTTIMEOUT_MS => $timeoutMs,
             CURLOPT_FOLLOWLOCATION => false,
             CURLOPT_SSL_VERIFYPEER => true,
             CURLOPT_SSL_VERIFYHOST => 2,
@@ -181,7 +241,7 @@ class AgentProfileFetcher
         ];
     }
 
-    protected function request(string $url, string $host, int $port, string $ip, string $scheme): ?string
+    protected function request(string $url, string $host, int $port, string $ip, string $scheme, int $timeoutMs): ?array
     {
         if (!function_exists('curl_init')) {
             return null;
@@ -196,15 +256,17 @@ class AgentProfileFetcher
             $body .= $chunk;
 
             return strlen($chunk);
-        }));
+        }, $timeoutMs));
 
         $ok = curl_exec($ch);
-        $code = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
-
-        if ($ok === false || $code !== 200) {
+        if ($ok === false) {
             return null;
         }
 
-        return $body;
+        return [
+            'code' => (int) curl_getinfo($ch, CURLINFO_HTTP_CODE),
+            'body' => $body,
+            'location' => (string) curl_getinfo($ch, CURLINFO_REDIRECT_URL),
+        ];
     }
 }

@@ -21,10 +21,11 @@ final class FdTestFixtureProfileFetcher extends AgentProfileFetcher
         return $this->ips;
     }
 
-    protected function request(string $url, string $host, int $port, string $ip, string $scheme): ?string
+    protected function request(string $url, string $host, int $port, string $ip, string $scheme, int $timeoutMs): ?array
     {
         $this->requested[] = $url;
+        $response = $this->bodies[$url] ?? null;
 
-        return $this->bodies[$url] ?? null;
+        return is_string($response) ? ['code' => 200, 'body' => $response, 'location' => ''] : $response;
     }
 }
