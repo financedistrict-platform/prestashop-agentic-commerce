@@ -69,19 +69,6 @@ class PrismClient
         return $this->request('POST', "/api/v{$version}/payment/settle", $body, 30, $ucpVersion);
     }
 
-    /**
-     * POST /api/v{version}/payment/verify — verify x402 authorization.
-     *
-     * @param array<string,mixed> $x402Authorization
-     * @return array<string,mixed>|null
-     */
-    public function verify(array $x402Authorization, string $ucpVersion): ?array
-    {
-        $version = (int) ($x402Authorization['x402Version'] ?? 2);
-
-        return $this->request('POST', "/api/v{$version}/payment/verify", $x402Authorization, 30, $ucpVersion);
-    }
-
     public static function userAgent(string $ucpVersion): string
     {
         return 'fd-prestashop-prism/' . $ucpVersion;
