@@ -57,6 +57,12 @@ class VersionResolver
             return $this->reject($declared, $outcome, $host, 422, 'version_unsupported', $this->unsupportedMessage($declared));
         }
 
+        if ($outcome === RequestContext::OUTCOME_REDIRECTED) {
+            $location = $profile['location'] ?? null;
+
+            return $this->reject($declared, $outcome, $host, 424, 'profile_redirected', self::redirectedMessage($location), $location);
+        }
+
         if ($this->versions->isStrict()) {
             if ($outcome === RequestContext::OUTCOME_UNREACHABLE) {
                 return $this->reject($declared, $outcome, $host, 424, 'profile_unreachable', 'Agent profile could not be retrieved.');
@@ -80,8 +86,18 @@ class VersionResolver
         );
     }
 
+    private static function redirectedMessage(?string $location): string
+    {
+        return $location === null
+            ? 'Agent profile URL redirects; use the final URL.'
+            : sprintf('Agent profile URL redirects to %s; use the final URL.', $location);
+    }
+
     private function outcome(array $profile, ?string $declared): string
     {
+        if (($profile['reason'] ?? null) === 'redirected') {
+            return RequestContext::OUTCOME_REDIRECTED;
+        }
         if (!empty($profile['failed'])) {
             return RequestContext::OUTCOME_UNREACHABLE;
         }
@@ -105,10 +121,14 @@ class VersionResolver
         return $this->context($version, $outcome, $declared);
     }
 
-    private function reject(?string $declared, string $outcome, string $host, int $status, string $code, string $message): RequestContext
+    private function reject(?string $declared, string $outcome, string $host, int $status, string $code, string $message, ?string $location = null): RequestContext
     {
         \Hook::exec(self::HOOK, ['outcome' => $outcome, 'version' => null, 'host' => $host]);
-        self::log(sprintf('ucp_profile_resolution=%s host=%s rejected=%s', $outcome, $host, $code));
+        $line = sprintf('ucp_profile_resolution=%s host=%s rejected=%s', $outcome, $host, $code);
+        if ($outcome === RequestContext::OUTCOME_REDIRECTED) {
+            $line .= sprintf(' location=%s', (string) $location);
+        }
+        self::log($line);
 
         return new RequestContext(
             $this->versions,

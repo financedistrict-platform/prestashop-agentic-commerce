@@ -17,6 +17,7 @@ final class RequestContext
     public const OUTCOME_UNDECLARED = 'undeclared';
     public const OUTCOME_UNKNOWN = 'unknown';
     public const OUTCOME_DISABLED = 'disabled';
+    public const OUTCOME_REDIRECTED = 'redirected';
 
     private static ?self $current = null;
 
