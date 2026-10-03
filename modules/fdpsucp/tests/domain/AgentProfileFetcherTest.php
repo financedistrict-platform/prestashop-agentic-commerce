@@ -178,11 +178,24 @@ final class AgentProfileFetcherTest extends TestCase
 
         $this->assertSame('2026-01-23', $result['version']);
         $this->assertCount(2, $fetcher::$requests);
-        $this->assertSame(explode('#', $location)[0], $fetcher::$requests[1]['url']);
+        $this->assertSame(str_replace('AGENT', 'agent', explode('#', $location)[0]), $fetcher::$requests[1]['url']);
         $this->assertSame('93.184.216.34', $fetcher::$requests[1]['ip']);
         $this->assertSame('agent.example', $fetcher::$requests[1]['host']);
         $this->assertGreaterThan(0, $fetcher::$requests[1]['timeoutMs']);
         $this->assertLessThanOrEqual(AgentProfileFetcher::TIMEOUT * 1000, $fetcher::$requests[1]['timeoutMs']);
+    }
+
+    public function test_mixed_case_same_origin_location_is_followed_on_the_pinned_host(): void
+    {
+        $fetcher = $this->fetcher(['93.184.216.34'], [$this->redirect(301, 'https://Store.Example/p/'), $this->declaring('2026-01-23')]);
+        $fetcher::$requests = [];
+
+        $result = $fetcher->lookup('https://store.example/p');
+
+        $this->assertSame('2026-01-23', $result['version']);
+        $this->assertSame('https://store.example/p/', $fetcher::$requests[1]['url']);
+        $this->assertSame('store.example', $fetcher::$requests[1]['host']);
+        $this->assertSame('93.184.216.34', $fetcher::$requests[1]['ip']);
     }
 
     public function test_followed_redirect_is_cached_under_the_original_url_only(): void

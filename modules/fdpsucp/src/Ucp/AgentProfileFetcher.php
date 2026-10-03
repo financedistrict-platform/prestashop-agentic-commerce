@@ -117,7 +117,7 @@ class AgentProfileFetcher
             if ($remaining <= 0) {
                 return ['failed' => true];
             }
-            $response = $this->request($location, $target['host'], $target['port'], $target['ip'], $target['scheme'], $remaining);
+            $response = $this->request(self::withHost($location, $target['host']), $target['host'], $target['port'], $target['ip'], $target['scheme'], $remaining);
             if ($response === null) {
                 return ['failed' => true];
             }
@@ -153,6 +153,11 @@ class AgentProfileFetcher
         $hash = strpos($location, '#');
 
         return $hash === false ? $location : substr($location, 0, $hash);
+    }
+
+    private static function withHost(string $url, string $host): string
+    {
+        return substr_replace($url, $host, strpos($url, '://') + 3, strlen($host));
     }
 
     private static function withoutControlCharacters(string $value): string
