@@ -155,12 +155,13 @@ The store speaks three UCP versions. Set them under **Modules → Finance Distri
 
 Install and upgrade both start on the latest version when no version is stored, and write both settings, so a later module update never moves a running store. Agents that declare `2026-04-08` or `2026-01-23` are still served in their version. Change the current version in the settings to move. Uninstalling the module deletes these settings.
 
-An agent picks a version by sending `UCP-Agent: profile="https://…"`. The module fetches that profile (HTTPS only, public IPs only, 3 s timeout, 128 KiB cap, no redirects, cached 10 minutes) and reads `ucp.version`:
+An agent picks a version by sending `UCP-Agent: profile="https://…"`. The module fetches that profile (HTTPS only, public IPs only, 3 s timeout, 128 KiB cap, one same-origin redirect followed, cached 10 minutes) and reads `ucp.version`:
 
 | Agent profile | `lenient` (default) | `strict` |
 |---------------|---------------------|----------|
 | No `UCP-Agent` header | current version, as before | same |
 | Unreachable, not HTTPS, private host, too large, timeout | current version + warning log | `424 profile_unreachable` |
+| Redirects to another origin, scheme, port or a second redirect | `424 profile_redirected` (names the Location) | same |
 | No or malformed `ucp.version` | current version + warning log | `422 profile_malformed` |
 | Unknown version date | `422 version_unsupported` | `422 version_unsupported` |
 | Known version, disabled in settings | `422 version_unsupported` | same |
