@@ -10,7 +10,7 @@ use FD\PrismPayment\Config\ConfigResolver;
 
 class FdPsPrism extends PaymentModule
 {
-    public const VERSION = '0.7.5';
+    public const VERSION = '0.7.6';
 
     public function __construct()
     {
