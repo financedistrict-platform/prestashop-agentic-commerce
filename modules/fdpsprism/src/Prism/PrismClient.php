@@ -8,8 +8,6 @@ if (!defined('_PS_VERSION_')) {
 
 class PrismClient
 {
-    public const USER_AGENT = 'fd-prestashop-prism/0.7.5';
-
     private string $apiUrl;
     private string $apiKey;
 
@@ -76,7 +74,6 @@ class PrismClient
             CURLOPT_CUSTOMREQUEST => $method,
             CURLOPT_RETURNTRANSFER => true,
             CURLOPT_HTTPHEADER => $headers,
-            CURLOPT_USERAGENT => self::USER_AGENT,
             CURLOPT_TIMEOUT => $timeout,
             CURLOPT_CONNECTTIMEOUT => 10,
             CURLOPT_SSL_VERIFYPEER => true,

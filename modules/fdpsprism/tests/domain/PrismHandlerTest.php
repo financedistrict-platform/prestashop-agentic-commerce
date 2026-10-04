@@ -80,24 +80,18 @@ final class PrismHandlerTest extends TestCase
         $this->assertSame('xyz.fd.prism_payment', $this->handler()->id());
     }
 
-    public function test_every_client_method_sends_the_constant_user_agent_and_versioned_paths(): void
+    public function test_every_client_method_uses_the_versioned_paths(): void
     {
         $client = new FdTestPrismClient();
         $client->fetchUcpHandlers('2026-08-25');
         $client->prepareUcpPayment('15.00', 'USD', 'https://shop.example/checkout-sessions/1', 'Order', '2026-04-08');
         $client->settle(['x402Version' => 2]);
 
-        $this->assertSame(array_fill(0, 3, 'fd-prestashop-prism/0.7.5'), $client->userAgents);
         $this->assertSame([
             'GET /api/v2/merchant/ucp/2026-08-25/handlers',
             'POST /api/v2/merchant/ucp/2026-04-08/payment-requirements',
             'POST /api/v2/payment/settle',
         ], $client->paths);
-    }
-
-    public function test_user_agent_matches_module_version(): void
-    {
-        $this->assertSame('fd-prestashop-prism/' . \FdPsPrism::VERSION, PrismClient::USER_AGENT);
     }
 
     public function test_prepare_uses_the_session_version_in_the_path(): void
@@ -264,7 +258,6 @@ final class FdTestPrismClient extends PrismClient
 {
     public array $responses = [];
     public array $paths = [];
-    public array $userAgents = [];
 
     public function __construct()
     {
@@ -274,7 +267,6 @@ final class FdTestPrismClient extends PrismClient
     protected function request(string $method, string $path, ?array $body, int $timeout): ?array
     {
         $this->paths[] = "$method $path";
-        $this->userAgents[] = self::USER_AGENT;
 
         return $this->responses["$method $path"] ?? null;
     }
