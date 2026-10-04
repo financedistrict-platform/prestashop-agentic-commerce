@@ -1,14 +1,4 @@
 <?php
-/**
- * Finance District — Prism UCP payment handler.
- *
- * Settles agent (x402) payments on-chain via the Prism gateway and places the
- * paid PrestaShop order. Registers with the UCP core (fdpsucp) via the
- * actionUcpCollectPaymentHandlers hook. Gateway URL + API key are configured
- * in this module's own BO screen, per shop (woo model — see ConfigResolver).
- *
- * Ported from woocommerce-prism-payment.
- */
 
 if (!defined('_PS_VERSION_')) {
     exit;
@@ -20,7 +10,7 @@ use FD\PrismPayment\Config\ConfigResolver;
 
 class FdPsPrism extends PaymentModule
 {
-    public const VERSION = '0.7.4';
+    public const VERSION = '0.7.5';
 
     public function __construct()
     {
@@ -51,8 +41,6 @@ class FdPsPrism extends PaymentModule
     }
 
     /**
-     * Contribute the Prism handler to the UCP payment registry.
-     *
      * @param array{registry: \FD\PrismUcp\Payment\PaymentRegistry} $params
      */
     public function hookActionUcpCollectPaymentHandlers(array $params): void
@@ -68,8 +56,6 @@ class FdPsPrism extends PaymentModule
         require_once __DIR__ . '/src/Prism/PrismHandler.php';
         $params['registry']->register(new \FD\PrismPayment\Prism\PrismHandler($this));
     }
-
-    // ----------------------------------------------------------- BO settings
 
     public function getContent(): string
     {

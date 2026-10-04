@@ -11,13 +11,6 @@ if (!defined('_PS_VERSION_')) {
     exit;
 }
 
-/**
- * Prism x402 stablecoin payment handler. Ported from FD_Prism_Handler
- * (woocommerce-prism-payment), adapted to the PrestaShop UCP core:
- *  - prepare → ask Prism for x402 payment requirements for the session total
- *  - settle  → guard the signed credential (NFR-1), settle on-chain via Prism,
- *              then place the paid PrestaShop order via PaymentModule::validateOrder.
- */
 final class PrismHandler implements PaymentHandlerInterface, VersionedPaymentHandlerInterface
 {
     public const NS = 'xyz.fd.prism_payment';
@@ -63,9 +56,6 @@ final class PrismHandler implements PaymentHandlerInterface, VersionedPaymentHan
     /** @return array<string,array<int,array<string,mixed>>> */
     public function getUcpDiscoveryHandlers(): array
     {
-        // Don't advertise a handler that can't actually settle: an unconfigured
-        // gateway (no API key) is omitted from discovery so agents never pick a
-        // payment method that would fail at settlement.
         if (!ConfigResolver::isConfigured()) {
             return [];
         }
@@ -155,9 +145,6 @@ final class PrismHandler implements PaymentHandlerInterface, VersionedPaymentHan
     }
 
     /**
-     * Ask Prism for x402 payment requirements for this session's total. Skips
-     * the round-trip when the resource URL and amount are unchanged (idempotent).
-     *
      * @param array{checkout_id:string,total:int,currency:string,checkout_base_url:string,store_name:string,checkout_meta:?array} $input
      * @return array<string,mixed>|null
      */
@@ -176,7 +163,6 @@ final class PrismHandler implements PaymentHandlerInterface, VersionedPaymentHan
 
         $resourceUrl = "$baseUrl/checkout-sessions/$sessionId";
 
-        // Idempotency: reuse the prior quote if resource URL + amount are unchanged.
         if (is_array($existing)
             && ($existing['prepared_resource_url'] ?? '') === $resourceUrl
             && (int) ($existing['prepared_amount'] ?? -1) === $total
@@ -204,8 +190,6 @@ final class PrismHandler implements PaymentHandlerInterface, VersionedPaymentHan
     }
 
     /**
-     * Guard the credential, settle on-chain, then place the paid order.
-     *
      * @param array{session:array,cart:\Cart,handler_id:string,instrument_type:string,credential:mixed,checkout_meta:?array} $input
      * @return array<string,mixed>
      */
@@ -223,7 +207,6 @@ final class PrismHandler implements PaymentHandlerInterface, VersionedPaymentHan
             return ['success' => false, 'error' => 'Prism instrument and credential type must be "x402"'];
         }
 
-        // Binding guard (NFR-1): the signed credential must match our quote.
         $summary = PrismValidator::extractSignedSummary($authorization);
         if ($summary === null) {
             return ['success' => false, 'error' => 'Could not extract payment summary from credential'];
@@ -237,8 +220,7 @@ final class PrismHandler implements PaymentHandlerInterface, VersionedPaymentHan
             return ['success' => false, 'error' => $check];
         }
 
-        // Settle on-chain via Prism.
-        $result = $this->client()->settle($authorization, RequestContext::current()->version());
+        $result = $this->client()->settle($authorization);
         if (!$result) {
             return ['success' => false, 'error' => 'Prism settlement request failed'];
         }
@@ -254,7 +236,6 @@ final class PrismHandler implements PaymentHandlerInterface, VersionedPaymentHan
             ?? $authorization['paymentPayload']['accepted']['network']
             ?? $authorization['paymentPayload']['network'] ?? '');
 
-        // Place the paid PrestaShop order from the session's transient cart.
         return $this->placeOrder($input['cart'], (string) $txRef, $network);
     }
 
@@ -270,13 +251,10 @@ final class PrismHandler implements PaymentHandlerInterface, VersionedPaymentHan
             return [];
         }
 
-        // Prism's prepare response is already in the payment_handlers shape.
         return $ucp;
     }
 
     /**
-     * Turn the transient cart into a paid order carrying the on-chain tx ref.
-     *
      * @return array<string,mixed>
      */
     private function placeOrder(\Cart $cart, string $txRef, string $network): array
@@ -333,8 +311,6 @@ final class PrismHandler implements PaymentHandlerInterface, VersionedPaymentHan
     }
 
     /**
-     * Decode an x402 credential from base64-JSON, raw JSON, or a structured object.
-     *
      * @param mixed $credential
      * @return array<string,mixed>|null
      */
