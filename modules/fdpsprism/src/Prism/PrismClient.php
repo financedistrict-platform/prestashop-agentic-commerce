@@ -24,9 +24,9 @@ class PrismClient
     }
 
     /** @return array<string,mixed>|null */
-    public function prepareUcpPayment(string $amount, string $currency, string $resourceUrl, string $description, string $ucpVersion): ?array
+    public function preparePaymentRequirements(string $amount, string $currency, string $resourceUrl, string $description): ?array
     {
-        return $this->request('POST', '/api/v2/merchant/ucp/' . rawurlencode($ucpVersion) . '/payment-requirements', [
+        return $this->request('POST', '/api/v2/merchant/payment-requirements', [
             'amount' => $amount,
             'currency' => $currency,
             'resource' => [

@@ -170,23 +170,48 @@ final class PrismHandler implements PaymentHandlerInterface, VersionedPaymentHan
             return $existing;
         }
 
-        $result = $this->client()->prepareUcpPayment(
+        $ucpVersion = RequestContext::current()->version();
+        $declaration = $this->checkoutDeclaration($ucpVersion);
+        if ($declaration === null) {
+            \PrestaShopLogger::addLog('[FD Prism] UCP handler declaration for ' . $ucpVersion . ' unavailable; Prism entry omitted from checkout', 3);
+
+            return is_array($existing) ? $existing : null;
+        }
+
+        $requirements = $this->client()->preparePaymentRequirements(
             PrismClient::minorToMajorString($total),
             $currency,
             $resourceUrl,
-            "Order checkout at $storeName",
-            RequestContext::current()->version()
+            "Order checkout at $storeName"
         );
 
-        if (!$result) {
+        if (!self::isPaymentRequirements($requirements)) {
             return is_array($existing) ? $existing : null;
         }
 
         return [
-            'ucp' => $result,
+            'ucp' => [self::NS => [[
+                'id' => $declaration['id'],
+                'version' => $declaration['version'],
+                'config' => $requirements,
+            ]]],
             'prepared_amount' => $total,
             'prepared_resource_url' => $resourceUrl,
         ];
+    }
+
+    private function checkoutDeclaration(string $ucpVersion): ?array
+    {
+        return $this->getUcpDiscoveryHandlersForVersion($ucpVersion)[self::NS][0] ?? null;
+    }
+
+    private static function isPaymentRequirements(mixed $requirements): bool
+    {
+        return is_array($requirements)
+            && isset($requirements['x402Version'])
+            && is_array($requirements['accepts'] ?? null)
+            && $requirements['accepts'] !== []
+            && array_is_list($requirements['accepts']);
     }
 
     /**
