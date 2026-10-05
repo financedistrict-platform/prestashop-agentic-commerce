@@ -128,9 +128,9 @@ final class CheckoutService
 
         [$totals, $fulfillment] = $this->priceAndFulfill($provisional, $formatted, $inputFulfillment);
 
-        $paymentMeta = $this->registry->prepareAll($this->prepareInput(self::uuid(), $totals, $currency));
-
         $uid = self::uuid();
+        $paymentMeta = $this->registry->prepareAll($this->prepareInput($uid, $totals, $currency));
+
         $secret = bin2hex(random_bytes(32));
         $now = date('Y-m-d H:i:s');
         $this->sessions->insert([

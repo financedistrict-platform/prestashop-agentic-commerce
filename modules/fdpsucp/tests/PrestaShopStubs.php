@@ -127,15 +127,56 @@ class Shop
     public $id = 1;
 }
 
+class Language
+{
+    public $id = 1;
+}
+
 class Context
 {
     public $currency;
     public $shop;
+    public $language;
 
     public function __construct()
     {
         $this->currency = new Currency();
         $this->shop = new Shop();
+        $this->language = new Language();
+    }
+}
+
+class Product
+{
+    public static array $prices = [];
+
+    public $id;
+    public $active = true;
+    public $out_of_stock = 1;
+    public $name;
+
+    public function __construct($id = null, $full = false, $idLang = null)
+    {
+        $this->id = (int) $id;
+        $this->name = 'Product ' . $this->id;
+    }
+
+    public static function getPriceStatic($idProduct, $usetax = true, $idProductAttribute = null)
+    {
+        return self::$prices[(int) $idProduct] ?? 0.0;
+    }
+
+    public static function isAvailableWhenOutOfStock($outOfStock): bool
+    {
+        return true;
+    }
+}
+
+class Validate
+{
+    public static function isLoadedObject($object): bool
+    {
+        return is_object($object) && !empty($object->id);
     }
 }
 
@@ -151,6 +192,7 @@ final class FdTestStubs
         Hook::$calls = [];
         Module::$hooks = [];
         Db::$statements = [];
+        Product::$prices = [];
         PrestaShopLogger::$logs = [];
         \FD\PrismUcp\Ucp\RequestContext::set(null);
         \FD\PrismUcp\Ucp\AgentProfileFetcher::resetCache();
