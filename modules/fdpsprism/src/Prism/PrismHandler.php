@@ -175,7 +175,7 @@ final class PrismHandler implements PaymentHandlerInterface, VersionedPaymentHan
         if ($declaration === null) {
             \PrestaShopLogger::addLog('[FD Prism] UCP handler declaration for ' . $ucpVersion . ' unavailable; Prism entry omitted from checkout', 3);
 
-            return is_array($existing) ? $existing : null;
+            return null;
         }
 
         $requirements = $this->client()->preparePaymentRequirements(
@@ -186,7 +186,9 @@ final class PrismHandler implements PaymentHandlerInterface, VersionedPaymentHan
         );
 
         if (!self::isPaymentRequirements($requirements)) {
-            return is_array($existing) ? $existing : null;
+            \PrestaShopLogger::addLog('[FD Prism] Payment requirements response invalid; Prism entry omitted from checkout', 3);
+
+            return null;
         }
 
         return [

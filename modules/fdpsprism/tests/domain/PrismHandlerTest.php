@@ -184,6 +184,22 @@ final class PrismHandlerTest extends TestCase
         $this->assertNull($this->prepare());
     }
 
+    public function test_failed_reprepare_drops_the_stale_quote(): void
+    {
+        $this->stubPrepare();
+        $stale = $this->prepare();
+        $this->client->responses['POST /api/v2/merchant/payment-requirements'] = null;
+
+        $this->assertNull($this->handler()->prepareCheckoutPayment([
+            'checkout_id' => 's1',
+            'total' => 2500,
+            'currency' => 'USD',
+            'checkout_base_url' => 'https://shop.example',
+            'store_name' => 'Shop',
+            'checkout_meta' => [PrismHandler::NS => $stale],
+        ]));
+    }
+
     public function test_prepared_offer_still_binds_the_credential(): void
     {
         $this->stubPrepare();
