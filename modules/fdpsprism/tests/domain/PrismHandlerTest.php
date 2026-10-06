@@ -80,27 +80,142 @@ final class PrismHandlerTest extends TestCase
         $this->assertSame('xyz.fd.prism_payment', $this->handler()->id());
     }
 
-    public function test_every_client_method_uses_the_versioned_paths(): void
+    public function test_every_client_method_uses_its_gateway_path(): void
     {
         $client = new FdTestPrismClient();
         $client->fetchUcpHandlers('2026-08-25');
-        $client->prepareUcpPayment('15.00', 'USD', 'https://shop.example/checkout-sessions/1', 'Order', '2026-04-08');
+        $client->preparePaymentRequirements('15.00', 'USD', 'https://shop.example/checkout-sessions/1', 'Order');
         $client->settle(['x402Version' => 2]);
 
         $this->assertSame([
             'GET /api/v2/merchant/ucp/2026-08-25/handlers',
-            'POST /api/v2/merchant/ucp/2026-04-08/payment-requirements',
+            'POST /api/v2/merchant/payment-requirements',
             'POST /api/v2/payment/settle',
         ], $client->paths);
     }
 
-    public function test_prepare_uses_the_session_version_in_the_path(): void
+    private function rawRequirements(): array
     {
-        RequestContext::set(RequestContext::forVersion('2026-01-23'));
+        return [
+            'x402Version' => 2,
+            'resource' => ['url' => 'https://shop.example/checkout-sessions/s1', 'description' => 'Order checkout at Shop'],
+            'accepts' => [['scheme' => 'exact', 'network' => 'eip155:84532', 'asset' => self::ASSET, 'amount' => '1500', 'payTo' => self::PAY_TO]],
+        ];
+    }
 
-        $this->handler()->prepareCheckoutPayment(['checkout_id' => 's1', 'total' => 1500, 'currency' => 'USD', 'checkout_base_url' => 'https://shop.example', 'store_name' => 'Shop', 'checkout_meta' => null]);
+    private function prepare(): ?array
+    {
+        return $this->handler()->prepareCheckoutPayment([
+            'checkout_id' => 's1',
+            'total' => 1500,
+            'currency' => 'USD',
+            'checkout_base_url' => 'https://shop.example',
+            'store_name' => 'Shop',
+            'checkout_meta' => null,
+        ]);
+    }
 
-        $this->assertSame(['POST /api/v2/merchant/ucp/2026-01-23/payment-requirements'], $this->client->paths);
+    private function stubPrepare(string $fixture = 'current-handlers-2026-04-08.json'): void
+    {
+        RequestContext::set(RequestContext::forVersion('2026-08-25'));
+        $this->client->responses['GET /api/v2/merchant/ucp/2026-08-25/handlers'] = self::recorded($fixture);
+        $this->client->responses['POST /api/v2/merchant/payment-requirements'] = $this->rawRequirements();
+    }
+
+    public function test_prepare_posts_to_the_protocol_free_path(): void
+    {
+        $this->stubPrepare();
+
+        $this->prepare();
+
+        $this->assertSame(['GET /api/v2/merchant/ucp/2026-08-25/handlers', 'POST /api/v2/merchant/payment-requirements'], $this->client->paths);
+        $this->assertSame([
+            'amount' => '15.00',
+            'currency' => 'USD',
+            'resource' => ['url' => 'https://shop.example/checkout-sessions/s1', 'description' => 'Order checkout at Shop'],
+        ], $this->client->bodies['POST /api/v2/merchant/payment-requirements']);
+    }
+
+    public function test_checkout_entry_matches_the_cached_discovery_declaration(): void
+    {
+        $this->stubPrepare();
+
+        $result = $this->prepare();
+        $declaration = $this->handler()->getUcpDiscoveryHandlersForVersion('2026-08-25')[PrismHandler::NS][0];
+        $entry = $this->handler()->getUcpCheckoutHandlers([PrismHandler::NS => $result])[PrismHandler::NS][0];
+
+        $this->assertSame(['id' => $declaration['id'], 'version' => $declaration['version']], ['id' => $entry['id'], 'version' => $entry['version']]);
+        $this->assertSame('2026-10-07', $entry['version']);
+        $this->assertSame($this->rawRequirements(), $entry['config']);
+        $this->assertSame(['id', 'version', 'config'], array_keys($entry));
+        $this->assertCount(2, $this->client->paths);
+    }
+
+    public function test_checkout_entry_uses_the_canonical_id_for_a_legacy_declaration(): void
+    {
+        $this->stubPrepare('legacy-handlers.json');
+
+        $entry = $this->handler()->getUcpCheckoutHandlers([PrismHandler::NS => $this->prepare()])[PrismHandler::NS][0];
+
+        $this->assertSame('xyz.fd.prism_payment', $entry['id']);
+        $this->assertSame('2026-01-15', $entry['version']);
+    }
+
+    public function test_no_declaration_omits_the_prism_entry_and_logs(): void
+    {
+        RequestContext::set(RequestContext::forVersion('2026-08-25'));
+        $this->client->responses['POST /api/v2/merchant/payment-requirements'] = $this->rawRequirements();
+
+        $this->assertNull($this->prepare());
+        $this->assertSame(['GET /api/v2/merchant/ucp/2026-08-25/handlers'], $this->client->paths);
+        $this->assertSame([], $this->handler()->getUcpCheckoutHandlers([PrismHandler::NS => null]));
+        $logged = array_filter(
+            PrestaShopLogger::$logs,
+            static fn (array $log): bool => str_contains($log['message'], 'Prism entry omitted from checkout') && $log['severity'] === 3
+        );
+        $this->assertNotEmpty($logged);
+    }
+
+    public function test_requirements_without_accepts_are_rejected(): void
+    {
+        $this->stubPrepare();
+        $this->client->responses['POST /api/v2/merchant/payment-requirements'] = ['x402Version' => 2, 'resource' => [], 'accepts' => []];
+
+        $this->assertNull($this->prepare());
+    }
+
+    public function test_failed_reprepare_drops_the_stale_quote(): void
+    {
+        $this->stubPrepare();
+        $stale = $this->prepare();
+        $this->client->responses['POST /api/v2/merchant/payment-requirements'] = null;
+
+        $this->assertNull($this->handler()->prepareCheckoutPayment([
+            'checkout_id' => 's1',
+            'total' => 2500,
+            'currency' => 'USD',
+            'checkout_base_url' => 'https://shop.example',
+            'store_name' => 'Shop',
+            'checkout_meta' => [PrismHandler::NS => $stale],
+        ]));
+    }
+
+    public function test_prepared_offer_still_binds_the_credential(): void
+    {
+        $this->stubPrepare();
+        $meta = [PrismHandler::NS => $this->prepare()];
+        $this->client->responses['POST /api/v2/payment/settle'] = ['success' => true, 'transaction' => '0x' . str_repeat('cd', 32), 'network' => 'eip155:84532'];
+        $credential = $this->x402Credential();
+        $credential['paymentPayload']['payload']['authorization']['value'] = '1500';
+
+        $result = $this->handler()->settlePayment([
+            'cart' => new Cart(),
+            'instrument_type' => 'x402',
+            'credential' => $credential,
+            'checkout_meta' => $meta,
+        ]);
+
+        $this->assertTrue($result['success'], (string) ($result['error'] ?? ''));
     }
 
     public function test_discovery_is_fetched_per_version(): void
@@ -258,6 +373,7 @@ final class FdTestPrismClient extends PrismClient
 {
     public array $responses = [];
     public array $paths = [];
+    public array $bodies = [];
 
     public function __construct()
     {
@@ -267,6 +383,7 @@ final class FdTestPrismClient extends PrismClient
     protected function request(string $method, string $path, ?array $body, int $timeout): ?array
     {
         $this->paths[] = "$method $path";
+        $this->bodies["$method $path"] = $body;
 
         return $this->responses["$method $path"] ?? null;
     }
