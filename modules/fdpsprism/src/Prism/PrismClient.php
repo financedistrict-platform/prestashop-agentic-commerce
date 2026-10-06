@@ -20,7 +20,7 @@ class PrismClient
     /** @return array<string,mixed>|null */
     public function fetchUcpHandlers(string $ucpVersion): ?array
     {
-        return $this->request('GET', '/api/v2/merchant/ucp/' . rawurlencode($ucpVersion) . '/handlers', null, 15);
+        return $this->request('GET', '/ucp/' . rawurlencode($ucpVersion) . '/handlers', null, 15);
     }
 
     /** @return array<string,mixed>|null */

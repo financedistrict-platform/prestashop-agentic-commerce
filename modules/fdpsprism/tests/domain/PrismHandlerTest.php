@@ -88,7 +88,7 @@ final class PrismHandlerTest extends TestCase
         $client->settle(['x402Version' => 2]);
 
         $this->assertSame([
-            'GET /api/v2/merchant/ucp/2026-08-25/handlers',
+            'GET /ucp/2026-08-25/handlers',
             'POST /api/v2/merchant/payment-requirements',
             'POST /api/v2/payment/settle',
         ], $client->paths);
@@ -118,7 +118,7 @@ final class PrismHandlerTest extends TestCase
     private function stubPrepare(string $fixture = 'current-handlers-2026-04-08.json'): void
     {
         RequestContext::set(RequestContext::forVersion('2026-08-25'));
-        $this->client->responses['GET /api/v2/merchant/ucp/2026-08-25/handlers'] = self::recorded($fixture);
+        $this->client->responses['GET /ucp/2026-08-25/handlers'] = self::recorded($fixture);
         $this->client->responses['POST /api/v2/merchant/payment-requirements'] = $this->rawRequirements();
     }
 
@@ -128,7 +128,7 @@ final class PrismHandlerTest extends TestCase
 
         $this->prepare();
 
-        $this->assertSame(['GET /api/v2/merchant/ucp/2026-08-25/handlers', 'POST /api/v2/merchant/payment-requirements'], $this->client->paths);
+        $this->assertSame(['GET /ucp/2026-08-25/handlers', 'POST /api/v2/merchant/payment-requirements'], $this->client->paths);
         $this->assertSame([
             'amount' => '15.00',
             'currency' => 'USD',
@@ -167,7 +167,7 @@ final class PrismHandlerTest extends TestCase
         $this->client->responses['POST /api/v2/merchant/payment-requirements'] = $this->rawRequirements();
 
         $this->assertNull($this->prepare());
-        $this->assertSame(['GET /api/v2/merchant/ucp/2026-08-25/handlers'], $this->client->paths);
+        $this->assertSame(['GET /ucp/2026-08-25/handlers'], $this->client->paths);
         $this->assertSame([], $this->handler()->getUcpCheckoutHandlers([PrismHandler::NS => null]));
         $logged = array_filter(
             PrestaShopLogger::$logs,
@@ -220,16 +220,16 @@ final class PrismHandlerTest extends TestCase
 
     public function test_discovery_is_fetched_per_version(): void
     {
-        $this->client->responses['GET /api/v2/merchant/ucp/2026-08-25/handlers'] = self::recorded('current-handlers-2026-04-08.json');
+        $this->client->responses['GET /ucp/2026-08-25/handlers'] = self::recorded('current-handlers-2026-04-08.json');
 
         $this->handler()->getUcpDiscoveryHandlersForVersion('2026-08-25');
 
-        $this->assertSame(['GET /api/v2/merchant/ucp/2026-08-25/handlers'], $this->client->paths);
+        $this->assertSame(['GET /ucp/2026-08-25/handlers'], $this->client->paths);
     }
 
     public function test_current_entry_keeps_prism_fields_and_overlays_plugin_authored_fields(): void
     {
-        $this->client->responses['GET /api/v2/merchant/ucp/2026-04-08/handlers'] = self::recorded('current-handlers-2026-04-08.json');
+        $this->client->responses['GET /ucp/2026-04-08/handlers'] = self::recorded('current-handlers-2026-04-08.json');
 
         $entry = $this->handler()->getUcpDiscoveryHandlersForVersion('2026-04-08')[PrismHandler::NS][0];
 
@@ -242,7 +242,7 @@ final class PrismHandlerTest extends TestCase
 
     public function test_legacy_entry_yields_one_canonical_entry(): void
     {
-        $this->client->responses['GET /api/v2/merchant/ucp/2026-04-08/handlers'] = self::recorded('legacy-handlers.json');
+        $this->client->responses['GET /ucp/2026-04-08/handlers'] = self::recorded('legacy-handlers.json');
 
         $handlers = $this->handler()->getUcpDiscoveryHandlersForVersion('2026-04-08');
 
@@ -258,16 +258,16 @@ final class PrismHandlerTest extends TestCase
     public function test_discovery_uses_the_request_version_by_default(): void
     {
         RequestContext::set(RequestContext::forVersion('2026-01-23'));
-        $this->client->responses['GET /api/v2/merchant/ucp/2026-01-23/handlers'] = self::recorded('legacy-handlers.json');
+        $this->client->responses['GET /ucp/2026-01-23/handlers'] = self::recorded('legacy-handlers.json');
 
         $this->assertNotSame([], $this->handler()->getUcpDiscoveryHandlers());
-        $this->assertSame(['GET /api/v2/merchant/ucp/2026-01-23/handlers'], $this->client->paths);
+        $this->assertSame(['GET /ucp/2026-01-23/handlers'], $this->client->paths);
     }
 
     public function test_discovery_is_cached_per_gateway_and_version(): void
     {
-        $this->client->responses['GET /api/v2/merchant/ucp/2026-04-08/handlers'] = self::recorded('current-handlers-2026-04-08.json');
-        $this->client->responses['GET /api/v2/merchant/ucp/2026-08-25/handlers'] = self::recorded('current-handlers-2026-04-08.json');
+        $this->client->responses['GET /ucp/2026-04-08/handlers'] = self::recorded('current-handlers-2026-04-08.json');
+        $this->client->responses['GET /ucp/2026-08-25/handlers'] = self::recorded('current-handlers-2026-04-08.json');
 
         $this->handler()->getUcpDiscoveryHandlersForVersion('2026-04-08');
         $this->handler()->getUcpDiscoveryHandlersForVersion('2026-04-08');
@@ -283,7 +283,7 @@ final class PrismHandlerTest extends TestCase
     public function test_expired_cache_is_refetched(): void
     {
         Configuration::$values[PrismHandler::cacheKey(self::GATEWAY, '2026-04-08')] = json_encode(['expires' => time() - 1, 'handlers' => self::recorded('legacy-handlers.json')]);
-        $this->client->responses['GET /api/v2/merchant/ucp/2026-04-08/handlers'] = self::recorded('current-handlers-2026-04-08.json');
+        $this->client->responses['GET /ucp/2026-04-08/handlers'] = self::recorded('current-handlers-2026-04-08.json');
 
         $entry = $this->handler()->getUcpDiscoveryHandlersForVersion('2026-04-08')[PrismHandler::NS][0];
 
@@ -295,7 +295,7 @@ final class PrismHandlerTest extends TestCase
     {
         $this->assertSame([], $this->handler()->getUcpDiscoveryHandlersForVersion('2026-04-08'));
 
-        $this->client->responses['GET /api/v2/merchant/ucp/2026-08-25/handlers'] = [PrismHandler::NS => [['id' => 'other', 'version' => 'v', 'spec' => 's', 'schema' => 's']]];
+        $this->client->responses['GET /ucp/2026-08-25/handlers'] = [PrismHandler::NS => [['id' => 'other', 'version' => 'v', 'spec' => 's', 'schema' => 's']]];
         $this->assertSame([], $this->handler()->getUcpDiscoveryHandlersForVersion('2026-08-25'));
 
         $this->assertCount(2, PrestaShopLogger::$logs);
