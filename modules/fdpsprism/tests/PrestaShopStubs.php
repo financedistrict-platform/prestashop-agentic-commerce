@@ -103,4 +103,9 @@ class Cart
 final class FdTestShipping
 {
     public const FULFILLMENT = '{"methods":[{"groups":[{"selected_option_id":"7"}]}]}';
+
+    public static function liveQuote(): string
+    {
+        return date('Y-m-d H:i:s', time() + 600);
+    }
 }

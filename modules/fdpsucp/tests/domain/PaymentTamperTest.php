@@ -34,6 +34,7 @@ final class PaymentTamperTest extends TestCase
 
         $session = FdTestGoldenRenderer::input('checkout-session.json');
         $session['ucp_version'] = null;
+        $session['expires_at'] = date('Y-m-d H:i:s', time() + 600);
         $this->sessions = new FdTestMemorySessions([self::SESSION_ID => $session]);
         $this->handler = new FdTestRecordingPrismHandler();
         $this->cart = new Cart();
@@ -536,6 +537,106 @@ final class PaymentTamperTest extends TestCase
         $this->assertSame(422, $response->status, (string) json_encode($response->body));
         $this->assertSame('cart_mismatch', $response->body['messages'][0]['code']);
         $this->assertSame([], $this->handler->settled);
+    }
+
+    private function expireQuote(?string $expiresAt): void
+    {
+        $this->sessions->rows[self::SESSION_ID]['expires_at'] = $expiresAt;
+    }
+
+    private function assertRequotedWithFreshExpiry(Response $response): void
+    {
+        $this->assertSame(409, $response->status, (string) json_encode($response->body));
+        $this->assertSame('quote_expired', $response->body['messages'][0]['code']);
+        $this->assertSame([], $this->handler->settled);
+        $this->assertSame('incomplete', $this->row()['status']);
+        $this->assertCount(1, $this->handler->prepared);
+        $this->assertGreaterThan(time(), strtotime($this->row()['expires_at']));
+    }
+
+    public function test_expired_quote_is_requoted_and_never_settled(): void
+    {
+        $this->expireQuote(date('Y-m-d H:i:s', time() - 1));
+
+        $this->assertRequotedWithFreshExpiry($this->complete());
+    }
+
+    public function test_quote_without_an_expiry_is_requoted_and_never_settled(): void
+    {
+        $this->expireQuote(null);
+
+        $this->assertRequotedWithFreshExpiry($this->complete());
+    }
+
+    public function test_quote_with_an_unreadable_expiry_is_requoted_and_never_settled(): void
+    {
+        $this->expireQuote('soon');
+
+        $this->assertRequotedWithFreshExpiry($this->complete());
+    }
+
+    public function test_settlement_gate_rejects_an_expired_quote(): void
+    {
+        $this->expireQuote(date('Y-m-d H:i:s', time() - 1));
+        $this->cart->deliveryOption = [9 => '7,'];
+        $registry = new PaymentRegistry();
+        $registry->register($this->handler);
+
+        $result = $registry->settle('xyz.fd.prism_payment', [
+            'session' => $this->row(),
+            'cart' => $this->cart,
+            'checkout_meta' => json_decode($this->row()['payment_meta'], true),
+        ]);
+
+        $this->assertFalse($result['success']);
+        $this->assertSame('Checkout quote has expired', $result['error']);
+        $this->assertSame([], $this->handler->settled);
+    }
+
+    public function test_session_update_reprepares_an_expired_quote_with_the_same_total(): void
+    {
+        $this->expireQuote(date('Y-m-d H:i:s', time() - 1));
+        $this->quote(4200);
+        $this->cart->id_address_delivery = 0;
+
+        $response = $this->service()->update(self::SESSION_ID, ['buyer' => ['first_name' => 'Anne']]);
+
+        $this->assertSame(200, $response->status, (string) json_encode($response->body));
+        $this->assertCount(1, $this->handler->prepared);
+        $this->assertGreaterThan(time(), strtotime($this->row()['expires_at']));
+    }
+
+    public function test_session_update_keeps_a_live_quote_with_the_same_total(): void
+    {
+        $expiresAt = $this->row()['expires_at'];
+        $this->quote(4200);
+        $this->cart->id_address_delivery = 0;
+
+        $response = $this->service()->update(self::SESSION_ID, ['buyer' => ['first_name' => 'Anne']]);
+
+        $this->assertSame(200, $response->status, (string) json_encode($response->body));
+        $this->assertSame([], $this->handler->prepared);
+        $this->assertSame($expiresAt, $this->row()['expires_at']);
+    }
+
+    public function test_session_create_quotes_with_a_short_expiry(): void
+    {
+        $response = $this->createUnderRequestCurrency(new Currency(Currency::getIdByIsoCode('EUR')));
+
+        $this->assertSame(201, $response->status, (string) json_encode($response->body));
+        $expiresAt = strtotime($this->sessions->rows[$response->body['id']]['expires_at']);
+        $this->assertGreaterThan(time(), $expiresAt);
+        $this->assertLessThanOrEqual(time() + PaymentIntegrity::QUOTE_TTL, $expiresAt);
+    }
+
+    public function test_requote_refreshes_the_quote_expiry(): void
+    {
+        $this->expireQuote(date('Y-m-d H:i:s', time() + 5));
+        $this->cart->orderTotals = [Cart::ONLY_PRODUCTS => 50.00, Cart::ONLY_SHIPPING => 4.95, Cart::BOTH => 54.95];
+
+        $this->assertSame(409, $this->complete()->status);
+
+        $this->assertGreaterThan(time() + 5, strtotime($this->row()['expires_at']));
     }
 
     private function dummySettle(?array $meta): array

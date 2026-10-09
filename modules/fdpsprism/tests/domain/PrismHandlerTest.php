@@ -74,7 +74,7 @@ final class PrismHandlerTest extends TestCase
 
     private function session(int $total = 4695): array
     {
-        return ['totals' => json_encode([['type' => 'total', 'amount' => $total]]), 'fulfillment' => FdTestShipping::FULFILLMENT];
+        return ['totals' => json_encode([['type' => 'total', 'amount' => $total]]), 'fulfillment' => FdTestShipping::FULFILLMENT, 'expires_at' => FdTestShipping::liveQuote()];
     }
 
     private function settle(mixed $instrumentType, mixed $credential): array
@@ -213,6 +213,26 @@ final class PrismHandlerTest extends TestCase
             'store_name' => 'Shop',
             'checkout_meta' => [PrismHandler::NS => $stale],
         ]));
+    }
+
+    public function test_prepare_always_fetches_fresh_requirements_for_the_same_amount(): void
+    {
+        $this->stubPrepare();
+        $stale = $this->prepare();
+        $fresh = $this->rawRequirements();
+        $fresh['accepts'][0]['amount'] = '1490';
+        $this->client->responses['POST /api/v2/merchant/payment-requirements'] = $fresh;
+
+        $prepared = $this->handler()->prepareCheckoutPayment([
+            'checkout_id' => 's1',
+            'total' => 1500,
+            'currency' => 'USD',
+            'checkout_base_url' => 'https://shop.example',
+            'store_name' => 'Shop',
+            'checkout_meta' => [PrismHandler::NS => $stale],
+        ]);
+
+        $this->assertSame('1490', $prepared['ucp'][PrismHandler::NS][0]['config']['accepts'][0]['amount'] ?? null);
     }
 
     public function test_prepared_offer_still_binds_the_credential(): void
