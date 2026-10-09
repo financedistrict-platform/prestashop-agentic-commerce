@@ -74,7 +74,7 @@ final class PrismHandlerTest extends TestCase
 
     private function session(int $total = 4695): array
     {
-        return ['totals' => json_encode([['type' => 'total', 'amount' => $total]])];
+        return ['totals' => json_encode([['type' => 'total', 'amount' => $total]]), 'fulfillment' => FdTestShipping::FULFILLMENT];
     }
 
     private function settle(mixed $instrumentType, mixed $credential): array

@@ -2,6 +2,7 @@
 
 namespace FD\PrismUcp\Payment;
 
+use FD\PrismUcp\Checkout\Fulfillment;
 use FD\PrismUcp\Ucp\Formatter;
 
 if (!defined('_PS_VERSION_')) {
@@ -51,6 +52,10 @@ final class PaymentIntegrity
 
     public static function settlementError(array $session, \Cart $cart, mixed $preparedAmount): ?string
     {
+        $carrierError = Fulfillment::selectionError($cart, $session);
+        if ($carrierError !== null) {
+            return $carrierError;
+        }
         $quoteError = self::quoteError($session, $cart);
         if ($quoteError !== null) {
             return $quoteError;

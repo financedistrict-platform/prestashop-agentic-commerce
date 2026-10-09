@@ -45,7 +45,7 @@ final class PrismPaymentTamperTest extends TestCase
         }
 
         return $this->settleThroughCore([
-            'session' => ['totals' => json_encode([['type' => 'total', 'amount' => $quotedTotal]])],
+            'session' => ['totals' => json_encode([['type' => 'total', 'amount' => $quotedTotal]]), 'fulfillment' => FdTestShipping::FULFILLMENT],
             'cart' => $this->cart,
             'instrument_type' => 'x402',
             'credential' => [
@@ -105,7 +105,7 @@ final class PrismPaymentTamperTest extends TestCase
     public function test_handler_called_without_a_verified_paid_amount_places_no_order(): void
     {
         $result = (new PrismHandler($this->module, $this->client))->settlePayment([
-            'session' => ['totals' => json_encode([['type' => 'total', 'amount' => 4695]])],
+            'session' => ['totals' => json_encode([['type' => 'total', 'amount' => 4695]]), 'fulfillment' => FdTestShipping::FULFILLMENT],
             'cart' => $this->cart,
             'instrument_type' => 'x402',
             'credential' => ['type' => 'x402', 'network' => 'eip155:84532', 'asset' => self::ASSET, 'value' => '4695', 'to' => self::PAY_TO],
@@ -122,6 +122,13 @@ final class PrismPaymentTamperTest extends TestCase
         $this->assertFalse($result['success']);
         $this->assertNotContains(self::SETTLE, $this->client->paths);
         $this->assertSame([], $this->module->validated);
+    }
+
+    public function test_cart_that_lost_the_selected_carrier_is_never_settled(): void
+    {
+        $this->cart->deliveryOption = [9 => '3,'];
+
+        $this->assertNothingCharged($this->settle(4695, 4695, '4695'));
     }
 
     public function test_quote_below_the_order_total_is_never_settled(): void
@@ -144,7 +151,7 @@ final class PrismPaymentTamperTest extends TestCase
         $this->cart->total = 0.0;
 
         $result = $this->settleThroughCore([
-            'session' => ['totals' => null],
+            'session' => ['totals' => null, 'fulfillment' => FdTestShipping::FULFILLMENT],
             'cart' => $this->cart,
             'instrument_type' => 'x402',
             'credential' => ['type' => 'x402', 'network' => 'eip155:84532', 'asset' => self::ASSET, 'value' => '0', 'to' => self::PAY_TO],

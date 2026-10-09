@@ -37,6 +37,8 @@ final class PaymentTamperTest extends TestCase
         $this->sessions = new FdTestMemorySessions([self::SESSION_ID => $session]);
         $this->handler = new FdTestRecordingPrismHandler();
         $this->cart = new Cart();
+        $this->cart->id_address_delivery = 9;
+        $this->cart->deliveryOptionList = [9 => ['7,' => ['total_price_with_tax' => 4.95]]];
         $this->sessions->rows[self::SESSION_ID]['payment_meta'] = json_encode(['xyz.fd.prism_payment' => ['prepared_amount' => 4695]]);
     }
 
@@ -143,10 +145,127 @@ final class PaymentTamperTest extends TestCase
         $this->assertSame(4695, $this->handler->settled[0]['paid_amount'] ?? null);
     }
 
+    private function offerCarriers(array $shippingByCarrier): void
+    {
+        $this->cart->deliveryOptionList = [9 => []];
+        foreach ($shippingByCarrier as $idCarrier => $shipping) {
+            $this->cart->deliveryOptionList[9][$idCarrier . ','] = ['total_price_with_tax' => $shipping];
+            $this->cart->carrierTotals[$idCarrier] = [Cart::ONLY_PRODUCTS => 42.00, Cart::ONLY_SHIPPING => $shipping, Cart::BOTH => 42.00 + $shipping];
+        }
+    }
+
+    private function selectStoredCarrier(string $optionId): void
+    {
+        $fulfillment = json_decode($this->row()['fulfillment'], true);
+        $fulfillment['methods'][0]['groups'][0]['selected_option_id'] = $optionId;
+        $this->sessions->rows[self::SESSION_ID]['fulfillment'] = json_encode($fulfillment);
+    }
+
+    private function dropStoredCarrierGroups(): void
+    {
+        $fulfillment = json_decode($this->row()['fulfillment'], true);
+        unset($fulfillment['methods'][0]['groups']);
+        $this->sessions->rows[self::SESSION_ID]['fulfillment'] = json_encode($fulfillment);
+    }
+
+    private function assertCarrierRejected(Response $response): void
+    {
+        $this->assertSame(422, $response->status, (string) json_encode($response->body));
+        $this->assertSame('carrier_unavailable', $response->body['messages'][0]['code']);
+        $this->assertSame('incomplete', $this->row()['status']);
+        $this->assertSame([], $this->handler->settled);
+    }
+
+    public function test_completion_is_rejected_when_the_selected_carrier_is_no_longer_offered(): void
+    {
+        $this->offerCarriers([3 => 4.95]);
+
+        $this->assertCarrierRejected($this->complete());
+    }
+
+    public function test_completion_is_rejected_when_the_session_has_no_selected_carrier(): void
+    {
+        $this->offerCarriers([7 => 4.95]);
+        $this->dropStoredCarrierGroups();
+
+        $this->assertCarrierRejected($this->complete());
+    }
+
+    public function test_completion_is_rejected_when_the_delivery_address_is_not_on_the_order_cart(): void
+    {
+        $this->offerCarriers([7 => 4.95]);
+        $this->cart->id_address_delivery = 0;
+
+        $this->assertCarrierRejected($this->complete());
+    }
+
+    public function test_completion_is_rejected_when_no_carrier_serves_the_address_any_more(): void
+    {
+        $this->cart->deliveryOptionList = [9 => []];
+
+        $this->assertCarrierRejected($this->complete());
+    }
+
+    public function test_completion_is_rejected_when_the_carrier_cannot_be_saved_on_the_cart(): void
+    {
+        $this->cart->saves = false;
+
+        $response = $this->complete();
+
+        $this->assertSame(422, $response->status, (string) json_encode($response->body));
+        $this->assertSame('cart_build_failed', $response->body['messages'][0]['code']);
+        $this->assertSame([], $this->handler->settled);
+    }
+
+    public function test_completion_settles_a_multi_package_carrier_selection(): void
+    {
+        $this->cart->deliveryOptionList = [9 => ['2,2,' => [], '2,3,' => []]];
+        $this->selectStoredCarrier('2,3');
+
+        $response = $this->complete();
+
+        $this->assertSame(200, $response->status, (string) json_encode($response->body));
+        $this->assertCount(1, $this->handler->settled);
+        $this->assertSame([9 => '2,3,'], $this->cart->deliveryOption);
+    }
+
+    public function test_settlement_gate_rejects_a_cart_without_the_selected_carrier(): void
+    {
+        $this->offerCarriers([3 => 4.95]);
+        $this->cart->deliveryOption = [9 => '3,'];
+        $registry = new PaymentRegistry();
+        $registry->register($this->handler);
+
+        $result = $registry->settle('xyz.fd.prism_payment', [
+            'session' => $this->row(),
+            'cart' => $this->cart,
+            'checkout_meta' => json_decode($this->row()['payment_meta'], true),
+        ]);
+
+        $this->assertFalse($result['success']);
+        $this->assertSame('The selected carrier is not available for this delivery address', $result['error']);
+        $this->assertSame([], $this->handler->settled);
+    }
+
+    public function test_session_update_with_a_carrier_that_is_not_offered_quotes_the_carrier_it_shows(): void
+    {
+        $this->offerCarriers([3 => 4.95, 5 => 8.95]);
+        $this->cart->orderTotals = $this->cart->carrierTotals[5];
+        $fulfillment = json_decode($this->row()['fulfillment'], true);
+        $fulfillment['methods'][0]['groups'][0]['selected_option_id'] = '99';
+
+        $response = $this->service()->update(self::SESSION_ID, ['fulfillment' => $fulfillment]);
+
+        $this->assertSame(200, $response->status, (string) json_encode($response->body));
+        $stored = json_decode($this->row()['fulfillment'], true);
+        $this->assertSame('3', $stored['methods'][0]['groups'][0]['selected_option_id']);
+        $this->assertSame(4695, PaymentIntegrity::quotedTotal($this->row()));
+        $this->assertSame([9 => '3,'], $this->cart->deliveryOption);
+    }
+
     public function test_completion_prices_the_carrier_selected_on_the_session(): void
     {
-        $this->cart->id_address_delivery = 9;
-        $this->cart->carrierTotals = [7 => [Cart::ONLY_PRODUCTS => 42.00, Cart::ONLY_SHIPPING => 10.00, Cart::BOTH => 52.00]];
+        $this->offerCarriers([3 => 2.00, 7 => 10.00]);
         $this->quote(5200);
 
         $response = $this->complete();
@@ -188,6 +307,7 @@ final class PaymentTamperTest extends TestCase
     private function updateUnderRequestCurrency(string $requestIso, array $body): Response
     {
         Product::$prices = [101 => ['EUR' => 18.00, 'KWD' => 6.00]];
+        $this->cart->id_address_delivery = 0;
         $context = Context::getContext();
         $context->currency = new Currency(Currency::getIdByIsoCode($requestIso));
         $registry = new PaymentRegistry();
@@ -420,6 +540,7 @@ final class PaymentTamperTest extends TestCase
 
     private function dummySettle(?array $meta): array
     {
+        $this->cart->deliveryOption = [9 => '7,'];
         $module = new PaymentModule();
         $registry = new PaymentRegistry();
         $registry->register(new DummyHandler($module));
@@ -477,6 +598,8 @@ final class FdTestFixedCartBuilder extends CartBuilder
 
     public function build(array $session, \Context $context): \Cart
     {
+        $this->applySessionCarrier($this->cart, $session);
+
         return $this->cart;
     }
 }

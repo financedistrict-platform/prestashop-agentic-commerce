@@ -206,7 +206,12 @@ final class FdTestCartBuilder extends CartBuilder
 {
     public function build(array $session, \Context $context): \Cart
     {
-        return new Cart();
+        $cart = new Cart();
+        $cart->id_address_delivery = 9;
+        $cart->deliveryOptionList = [9 => ['7,' => ['total_price_with_tax' => 4.95]]];
+        $this->applySessionCarrier($cart, $session);
+
+        return $cart;
     }
 }
 

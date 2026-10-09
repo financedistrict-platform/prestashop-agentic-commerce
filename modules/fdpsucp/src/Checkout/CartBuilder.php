@@ -63,10 +63,7 @@ class CartBuilder
             }
         }
 
-        // Pick the cheapest available carrier if we have an address.
-        if ($address !== null) {
-            $this->assignDefaultCarrier($cart);
-        }
+        $this->applySessionCarrier($cart, $session);
 
         return $cart;
     }
@@ -84,27 +81,17 @@ class CartBuilder
         return $idCurrency;
     }
 
-    /**
-     * Select a specific carrier on the cart (agent chose a shipping option).
-     */
-    public function selectCarrier(\Cart $cart, int $idCarrier): void
+    public function applySessionCarrier(\Cart $cart, array $session): void
     {
-        $idAddress = (int) $cart->id_address_delivery;
-        if ($idAddress === 0) {
+        $offered = Fulfillment::offeredOptionKeys($cart);
+        if ($offered === []) {
             return;
         }
-        $cart->setDeliveryOption([$idAddress => $idCarrier . ',']);
-        $cart->update();
-    }
-
-    public function selectSessionCarrier(\Cart $cart, ?array $fulfillment): ?string
-    {
-        $selected = Fulfillment::selectedCarrierId($fulfillment);
-        if ($selected !== null && ctype_digit($selected)) {
-            $this->selectCarrier($cart, (int) $selected);
+        $selected = Fulfillment::selectedCarrierId($this->decode($session['fulfillment'] ?? null)) . ',';
+        $cart->setDeliveryOption([(int) $cart->id_address_delivery => in_array($selected, $offered, true) ? $selected : $offered[0]]);
+        if (!$cart->update()) {
+            throw new \RuntimeException('The selected carrier could not be saved on the cart');
         }
-
-        return $selected;
     }
 
     /**
@@ -228,22 +215,6 @@ class CartBuilder
         $address->add();
 
         return $address;
-    }
-
-    private function assignDefaultCarrier(\Cart $cart): void
-    {
-        $deliveryOptions = $cart->getDeliveryOptionList();
-        $idAddress = (int) $cart->id_address_delivery;
-        if (empty($deliveryOptions[$idAddress])) {
-            return;
-        }
-
-        // getDeliveryOption() returns the best (default) delivery option string.
-        $best = $cart->getDeliveryOption(null, true);
-        if (is_array($best) && isset($best[$idAddress])) {
-            $cart->setDeliveryOption($best);
-            $cart->update();
-        }
     }
 
     private function toMinor(float $amount): int

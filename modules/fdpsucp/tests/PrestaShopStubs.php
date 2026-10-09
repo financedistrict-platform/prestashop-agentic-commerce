@@ -247,6 +247,8 @@ class Cart
     ];
 
     public ?array $deliveryOption = null;
+    public array $deliveryOptionList = [];
+    public bool $saves = true;
     public array $carrierTotals = [];
 
     public function getOrderTotal($withTaxes = true, $type = self::BOTH)
@@ -265,7 +267,7 @@ class Cart
 
     public function update($nullValues = false)
     {
-        return true;
+        return $this->saves;
     }
 
     public function getProducts($refresh = false)
@@ -275,7 +277,25 @@ class Cart
 
     public function getDeliveryOptionList()
     {
-        return [];
+        return $this->deliveryOptionList;
+    }
+
+    public function getDeliveryOption($defaultCountry = null, $dontAutoSelectOptions = false, $useCache = true)
+    {
+        if ($this->deliveryOption !== null) {
+            $valid = true;
+            foreach ($this->deliveryOption as $idAddress => $key) {
+                $valid = $valid && isset($this->deliveryOptionList[$idAddress][$key]);
+            }
+            if ($valid) {
+                return $this->deliveryOption;
+            }
+        }
+        if ($dontAutoSelectOptions) {
+            return false;
+        }
+
+        return array_map(fn (array $options): string => (string) array_key_first($options), $this->deliveryOptionList);
     }
 }
 
