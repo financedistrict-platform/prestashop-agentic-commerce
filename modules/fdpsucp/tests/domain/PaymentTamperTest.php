@@ -169,6 +169,43 @@ final class PaymentTamperTest extends TestCase
         $this->assertSame([], $this->handler->settled);
     }
 
+    private function updateUnderRequestCurrency(string $requestIso, array $body): Response
+    {
+        Product::$prices = [101 => ['EUR' => 18.00, 'KWD' => 6.00]];
+        $context = Context::getContext();
+        $context->currency = new Currency(Currency::getIdByIsoCode($requestIso));
+        $registry = new PaymentRegistry();
+        $registry->register($this->handler);
+        $service = new CheckoutService($context, $registry, FdTestGoldenRenderer::ENDPOINT, hash('sha256', ''), self::SECRET);
+        (new ReflectionProperty(CheckoutService::class, 'sessions'))->setValue($service, $this->sessions);
+        (new ReflectionProperty(CheckoutService::class, 'cartBuilder'))->setValue($service, new FdTestFixedCartBuilder($this->cart));
+
+        return $service->update(self::SESSION_ID, $body);
+    }
+
+    public function test_session_update_prices_line_items_in_the_session_currency_not_the_request_currency(): void
+    {
+        $response = $this->updateUnderRequestCurrency('KWD', ['line_items' => [['item' => ['id' => '101'], 'quantity' => 2]]]);
+
+        $this->assertSame(200, $response->status, (string) json_encode($response->body));
+        $this->assertSame('EUR', $this->row()['currency']);
+        $this->assertSame(1800, json_decode($this->row()['line_items'], true)[0]['item']['price']);
+        $this->assertSame([['type' => 'subtotal', 'amount' => 3600], ['type' => 'total', 'amount' => 3600]], json_decode($this->row()['totals'], true));
+        $this->assertSame('EUR', Context::getContext()->currency->iso_code);
+    }
+
+    public function test_session_update_with_an_unknown_session_currency_is_rejected(): void
+    {
+        $this->sessions->rows[self::SESSION_ID]['currency'] = 'XYZ';
+        $before = $this->row();
+
+        $response = $this->updateUnderRequestCurrency('EUR', ['line_items' => [['item' => ['id' => '101'], 'quantity' => 2]]]);
+
+        $this->assertSame(422, $response->status, (string) json_encode($response->body));
+        $this->assertSame('invalid_currency', $response->body['messages'][0]['code']);
+        $this->assertSame($before, $this->row());
+    }
+
     private function dummySettle(?array $meta): array
     {
         $module = new PaymentModule();

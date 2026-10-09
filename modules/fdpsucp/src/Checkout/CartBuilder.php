@@ -27,8 +27,7 @@ class CartBuilder
         $idShop = (int) $session['id_shop'];
         $idLang = (int) $context->language->id;
 
-        $currency = \Currency::getIdByIsoCode((string) ($session['currency'] ?? ''), $idShop)
-            ?: (int) \Configuration::get('PS_CURRENCY_DEFAULT');
+        $currency = $this->pinCurrency($session, $context);
 
         $buyer = $this->decode($session['buyer'] ?? null);
         $customer = $this->resolveGuestCustomer($buyer, $idShop, $idLang);
@@ -70,6 +69,18 @@ class CartBuilder
         }
 
         return $cart;
+    }
+
+    public function pinCurrency(array $session, \Context $context): int
+    {
+        $idShop = (int) $context->shop->id;
+        $idCurrency = (int) \Currency::getIdByIsoCode((string) ($session['currency'] ?? ''), $idShop);
+        if ($idCurrency <= 0) {
+            throw new \UnexpectedValueException('Checkout session currency is not available in this shop');
+        }
+        $context->currency = new \Currency($idCurrency, null, $idShop);
+
+        return $idCurrency;
     }
 
     /**

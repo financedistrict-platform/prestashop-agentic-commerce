@@ -197,6 +197,12 @@ final class CheckoutService
             return UcpError::response('session_' . $session['status'], 'Session is ' . $session['status'], 409);
         }
 
+        try {
+            $this->cartBuilder->pinCurrency($session, $this->context);
+        } catch (\UnexpectedValueException $e) {
+            return UcpError::response('invalid_currency', $e->getMessage(), 422);
+        }
+
         $idLang = (int) $this->context->language->id;
         $formatted = json_decode($session['line_items'] ?? '[]', true) ?: [];
         $buyer = json_decode($session['buyer'] ?? 'null', true);

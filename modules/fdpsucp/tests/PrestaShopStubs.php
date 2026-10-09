@@ -140,7 +140,23 @@ class Order
 
 class Currency
 {
+    public static array $ids = ['EUR' => 1, 'KWD' => 2];
+
+    public $id = 1;
     public $iso_code = 'EUR';
+
+    public function __construct($id = null, $idLang = null, $idShop = null)
+    {
+        if ($id !== null) {
+            $this->id = (int) $id;
+            $this->iso_code = (string) array_search($this->id, self::$ids, true);
+        }
+    }
+
+    public static function getIdByIsoCode($isoCode, $idShop = 0)
+    {
+        return self::$ids[$isoCode] ?? 0;
+    }
 }
 
 class Shop
@@ -191,7 +207,9 @@ class Product
 
     public static function getPriceStatic($idProduct, $usetax = true, $idProductAttribute = null)
     {
-        return self::$prices[(int) $idProduct] ?? 0.0;
+        $price = self::$prices[(int) $idProduct] ?? 0.0;
+
+        return is_array($price) ? ($price[Context::getContext()->currency->iso_code] ?? 0.0) : $price;
     }
 
     public static function isAvailableWhenOutOfStock($outOfStock): bool
