@@ -160,16 +160,8 @@ final class PrismHandler implements PaymentHandlerInterface, VersionedPaymentHan
         $sessionId = (string) ($input['checkout_id'] ?? '');
         $baseUrl = rtrim((string) ($input['checkout_base_url'] ?? ''), '/');
         $storeName = (string) ($input['store_name'] ?? 'PrestaShop');
-        $existing = $input['checkout_meta'][$this->id()] ?? $input['checkout_meta'][self::LEGACY_ID] ?? null;
 
         $resourceUrl = "$baseUrl/checkout-sessions/$sessionId";
-
-        if (is_array($existing)
-            && ($existing['prepared_resource_url'] ?? '') === $resourceUrl
-            && (int) ($existing['prepared_amount'] ?? -1) === $total
-        ) {
-            return $existing;
-        }
 
         $ucpVersion = RequestContext::current()->version();
         $declaration = $this->checkoutDeclaration($ucpVersion);

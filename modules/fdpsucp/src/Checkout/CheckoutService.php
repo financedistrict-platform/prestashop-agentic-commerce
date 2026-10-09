@@ -139,7 +139,7 @@ final class CheckoutService
         [$totals, $fulfillment, $formatted] = $priced;
 
         $uid = self::uuid();
-        $paymentMeta = $this->registry->prepareAll($this->prepareInput($uid, $totals, $currency));
+        $quote = $this->quote($uid, $totals, $currency);
 
         $secret = bin2hex(random_bytes(32));
         $now = date('Y-m-d H:i:s');
@@ -152,15 +152,13 @@ final class CheckoutService
             'totals' => json_encode($totals),
             'buyer' => $buyer ? json_encode($buyer) : null,
             'fulfillment' => $fulfillment ? json_encode($fulfillment) : null,
-            'payment_meta' => json_encode($paymentMeta),
             'agent_fingerprint' => $this->agentFingerprint,
             'session_secret_hash' => hash('sha256', $secret),
             'idempotency_key' => $idempotencyKey,
             'ucp_version' => RequestContext::current()->sessionPin(),
             'created_at' => $now,
             'updated_at' => $now,
-            'expires_at' => date('Y-m-d H:i:s', time() + 6 * 3600),
-        ]);
+        ] + $quote);
 
         $session = $this->sessions->findByUid($uid, $this->idShop());
         $out = Formatter::checkoutSession($session, $this->registry);
@@ -287,11 +285,12 @@ final class CheckoutService
         // Re-prepare payment if the total changed.
         $oldTotal = $this->totalOf(json_decode($session['totals'] ?? '[]', true) ?: []);
         $newTotal = $this->totalOf($totals);
-        if ($oldTotal !== $newTotal || empty($session['payment_meta']) || $session['payment_meta'] === 'null') {
-            $paymentMeta = $this->registry->prepareAll(
-                $this->prepareInput($uid, $totals, (string) $session['currency'])
-            );
-            $updates['payment_meta'] = json_encode($paymentMeta);
+        if ($oldTotal !== $newTotal
+            || empty($session['payment_meta'])
+            || $session['payment_meta'] === 'null'
+            || PaymentIntegrity::quoteExpired($session)
+        ) {
+            $updates = $this->quote($uid, $totals, (string) $session['currency']) + $updates;
         }
 
         $this->sessions->update($uid, $this->idShop(), $updates);
@@ -418,7 +417,7 @@ final class CheckoutService
 
         if (PaymentIntegrity::quoteError($session, $cart) !== null) {
             try {
-                return $this->requote($uid, $session, $cart, $lines);
+                return $this->requote($uid, $session, $cart, $lines, PaymentIntegrity::quoteExpired($session));
             } catch (\Throwable $e) {
                 $this->sessions->update($uid, $this->idShop(), ['status' => 'incomplete']);
                 \PrestaShopLogger::addLog('[FD UCP] Requote failed: ' . $e->getMessage(), 3);
@@ -546,18 +545,23 @@ final class CheckoutService
         return $totals;
     }
 
-    private function requote(string $uid, array $session, \Cart $cart, array $lines): Response
+    private function requote(string $uid, array $session, \Cart $cart, array $lines, bool $expired): Response
     {
         $totals = $this->cartTotals($cart);
         $this->sessions->update($uid, $this->idShop(), [
             'status' => 'incomplete',
             'line_items' => json_encode($lines),
             'totals' => json_encode($totals),
-            'payment_meta' => json_encode($this->registry->prepareAll(
-                $this->prepareInput($uid, $totals, (string) $session['currency'])
-            )),
             'updated_at' => date('Y-m-d H:i:s'),
-        ]);
+        ] + $this->quote($uid, $totals, (string) $session['currency']));
+
+        if ($expired) {
+            return UcpError::response(
+                'quote_expired',
+                'The checkout quote expired. The session was re-quoted; fetch it and pay the new amount.',
+                409
+            );
+        }
 
         return UcpError::response(
             'quote_changed',
@@ -577,6 +581,14 @@ final class CheckoutService
             }
         }
         return 0;
+    }
+
+    private function quote(string $uid, array $totals, string $currency): array
+    {
+        return [
+            'payment_meta' => json_encode($this->registry->prepareAll($this->prepareInput($uid, $totals, $currency))),
+            'expires_at' => PaymentIntegrity::quoteExpiry(),
+        ];
     }
 
     /**

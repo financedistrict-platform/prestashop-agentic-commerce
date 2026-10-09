@@ -11,6 +11,21 @@ if (!defined('_PS_VERSION_')) {
 
 final class PaymentIntegrity
 {
+    public const QUOTE_TTL = 1800;
+
+    public static function quoteExpiry(): string
+    {
+        return date('Y-m-d H:i:s', time() + self::QUOTE_TTL);
+    }
+
+    public static function quoteExpired(array $session): bool
+    {
+        $expiresAt = $session['expires_at'] ?? null;
+        $timestamp = is_string($expiresAt) ? strtotime($expiresAt) : false;
+
+        return $timestamp === false || $timestamp <= time();
+    }
+
     public static function quotedTotal(array $session): ?int
     {
         $totals = $session['totals'] ?? null;
@@ -38,6 +53,9 @@ final class PaymentIntegrity
 
     public static function quoteError(array $session, \Cart $cart): ?string
     {
+        if (self::quoteExpired($session)) {
+            return 'Checkout quote has expired';
+        }
         $quoted = self::quotedTotal($session);
         if ($quoted === null) {
             return 'Checkout session has no quoted total';

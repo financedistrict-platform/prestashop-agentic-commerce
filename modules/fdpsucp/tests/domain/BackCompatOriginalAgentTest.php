@@ -30,6 +30,7 @@ final class BackCompatOriginalAgentTest extends TestCase
         $session = FdTestGoldenRenderer::input('checkout-session.json');
         $session['ucp_version'] = null;
         $session['payment_meta'] = json_encode(['xyz.fd.prism_payment' => ['prepared_amount' => 4695]]);
+        $session['expires_at'] = date('Y-m-d H:i:s', time() + 600);
         $this->sessions = new FdTestMemorySessions([self::SESSION_ID => $session]);
         $this->handler = new FdTestRecordingPrismHandler();
     }

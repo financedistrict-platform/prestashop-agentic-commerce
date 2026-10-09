@@ -32,7 +32,7 @@ final class PrismPaymentTamperTest extends TestCase
         $this->cart = new Cart();
     }
 
-    private function settle(int $quotedTotal, ?int $preparedAmount, string $tokenAmount): array
+    private function settle(int $quotedTotal, ?int $preparedAmount, string $tokenAmount, ?string $expiresAt = null): array
     {
         $node = ['ucp' => [PrismHandler::NS => [['config' => ['accepts' => [[
             'network' => 'eip155:84532',
@@ -45,7 +45,7 @@ final class PrismPaymentTamperTest extends TestCase
         }
 
         return $this->settleThroughCore([
-            'session' => ['totals' => json_encode([['type' => 'total', 'amount' => $quotedTotal]]), 'fulfillment' => FdTestShipping::FULFILLMENT],
+            'session' => ['totals' => json_encode([['type' => 'total', 'amount' => $quotedTotal]]), 'fulfillment' => FdTestShipping::FULFILLMENT, 'expires_at' => $expiresAt ?? FdTestShipping::liveQuote()],
             'cart' => $this->cart,
             'instrument_type' => 'x402',
             'credential' => [
@@ -105,7 +105,7 @@ final class PrismPaymentTamperTest extends TestCase
     public function test_handler_called_without_a_verified_paid_amount_places_no_order(): void
     {
         $result = (new PrismHandler($this->module, $this->client))->settlePayment([
-            'session' => ['totals' => json_encode([['type' => 'total', 'amount' => 4695]]), 'fulfillment' => FdTestShipping::FULFILLMENT],
+            'session' => ['totals' => json_encode([['type' => 'total', 'amount' => 4695]]), 'fulfillment' => FdTestShipping::FULFILLMENT, 'expires_at' => FdTestShipping::liveQuote()],
             'cart' => $this->cart,
             'instrument_type' => 'x402',
             'credential' => ['type' => 'x402', 'network' => 'eip155:84532', 'asset' => self::ASSET, 'value' => '4695', 'to' => self::PAY_TO],
@@ -129,6 +129,11 @@ final class PrismPaymentTamperTest extends TestCase
         $this->cart->deliveryOption = [9 => '3,'];
 
         $this->assertNothingCharged($this->settle(4695, 4695, '4695'));
+    }
+
+    public function test_expired_quote_is_never_settled(): void
+    {
+        $this->assertNothingCharged($this->settle(4695, 4695, '4695', date('Y-m-d H:i:s', time() - 1)));
     }
 
     public function test_quote_below_the_order_total_is_never_settled(): void
