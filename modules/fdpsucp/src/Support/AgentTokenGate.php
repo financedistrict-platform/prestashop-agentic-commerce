@@ -21,6 +21,9 @@ final class AgentTokenGate
         if (isset($headers['ucp-agent-token'])) {
             return hash_equals($configuredToken, $headers['ucp-agent-token']);
         }
+        if (isset($headers['x-api-key']) && is_string($headers['x-api-key'])) {
+            return hash_equals($configuredToken, trim($headers['x-api-key']));
+        }
 
         return false;
     }
