@@ -308,7 +308,6 @@ final class PaymentTamperTest extends TestCase
     private function updateUnderRequestCurrency(string $requestIso, array $body): Response
     {
         Product::$prices = [101 => ['EUR' => 18.00, 'KWD' => 6.00]];
-        $this->cart->id_address_delivery = 0;
         $context = Context::getContext();
         $context->currency = new Currency(Currency::getIdByIsoCode($requestIso));
         $registry = new PaymentRegistry();
@@ -322,6 +321,8 @@ final class PaymentTamperTest extends TestCase
 
     public function test_session_update_prices_line_items_in_the_session_currency_not_the_request_currency(): void
     {
+        $this->sessions->rows[self::SESSION_ID]['fulfillment'] = null;
+
         $response = $this->updateUnderRequestCurrency('KWD', ['line_items' => [['item' => ['id' => '101'], 'quantity' => 2]]]);
 
         $this->assertSame(200, $response->status, (string) json_encode($response->body));
@@ -597,7 +598,7 @@ final class PaymentTamperTest extends TestCase
     {
         $this->expireQuote(date('Y-m-d H:i:s', time() - 1));
         $this->quote(4200);
-        $this->cart->id_address_delivery = 0;
+        $this->sessions->rows[self::SESSION_ID]['fulfillment'] = null;
 
         $response = $this->service()->update(self::SESSION_ID, ['buyer' => ['first_name' => 'Anne']]);
 
@@ -610,7 +611,7 @@ final class PaymentTamperTest extends TestCase
     {
         $expiresAt = $this->row()['expires_at'];
         $this->quote(4200);
-        $this->cart->id_address_delivery = 0;
+        $this->sessions->rows[self::SESSION_ID]['fulfillment'] = null;
 
         $response = $this->service()->update(self::SESSION_ID, ['buyer' => ['first_name' => 'Anne']]);
 
@@ -637,6 +638,117 @@ final class PaymentTamperTest extends TestCase
         $this->assertSame(409, $this->complete()->status);
 
         $this->assertGreaterThan(time() + 5, strtotime($this->row()['expires_at']));
+    }
+
+    private function shipToSweden(): Response
+    {
+        $fulfillment = json_decode($this->row()['fulfillment'], true);
+        $fulfillment['methods'][0]['destinations'] = self::SWEDEN['methods'][0]['destinations'];
+
+        return $this->service()->update(self::SESSION_ID, ['fulfillment' => $fulfillment]);
+    }
+
+    public function test_completion_is_rejected_when_no_carrier_serves_the_address_and_the_session_holds_a_carrierless_option(): void
+    {
+        $this->cart->deliveryOptionList = [9 => []];
+        $this->selectStoredCarrier('free_shipping');
+
+        $this->assertCarrierRejected($this->complete());
+    }
+
+    public function test_completion_is_rejected_when_no_carrier_serves_the_address_and_no_option_is_selected(): void
+    {
+        $this->cart->deliveryOptionList = [];
+        $this->dropStoredCarrierGroups();
+
+        $this->assertCarrierRejected($this->complete());
+    }
+
+    public function test_settlement_gate_rejects_a_cart_that_no_carrier_serves(): void
+    {
+        $this->cart->deliveryOptionList = [9 => []];
+        $this->selectStoredCarrier('free_shipping');
+        $registry = new PaymentRegistry();
+        $registry->register($this->handler);
+
+        $result = $registry->settle('xyz.fd.prism_payment', [
+            'session' => $this->row(),
+            'cart' => $this->cart,
+            'checkout_meta' => json_decode($this->row()['payment_meta'], true),
+        ]);
+
+        $this->assertFalse($result['success']);
+        $this->assertSame([], $this->handler->settled);
+    }
+
+    public function test_session_update_to_an_address_no_carrier_serves_is_rejected_without_a_free_option(): void
+    {
+        $this->cart->deliveryOptionList = [9 => []];
+        $before = $this->row();
+
+        $response = $this->shipToSweden();
+
+        $this->assertSame(422, $response->status, (string) json_encode($response->body));
+        $this->assertSame('carrier_unavailable', $response->body['messages'][0]['code']);
+        $this->assertSame($before['fulfillment'], $this->row()['fulfillment']);
+        $this->assertSame($before['totals'], $this->row()['totals']);
+    }
+
+    public function test_session_update_to_an_address_the_shop_does_not_serve_is_rejected(): void
+    {
+        $this->cart->id_address_delivery = 0;
+        $before = $this->row();
+
+        $response = $this->shipToSweden();
+
+        $this->assertSame(422, $response->status, (string) json_encode($response->body));
+        $this->assertSame('carrier_unavailable', $response->body['messages'][0]['code']);
+        $this->assertSame($before['totals'], $this->row()['totals']);
+    }
+
+    public function test_virtual_cart_completes_without_a_carrier(): void
+    {
+        $this->cart->virtual = true;
+        $this->cart->deliveryOptionList = [9 => []];
+        $this->cart->orderTotals = [Cart::ONLY_PRODUCTS => 46.95, Cart::ONLY_SHIPPING => 0.0, Cart::BOTH => 46.95];
+        $this->dropStoredCarrierGroups();
+
+        $response = $this->complete();
+
+        $this->assertSame(200, $response->status, (string) json_encode($response->body));
+        $this->assertCount(1, $this->handler->settled);
+    }
+
+    public function test_delivery_country_must_be_active(): void
+    {
+        Country::$inactive = [113];
+
+        $this->assertSame(0, (new CartBuilder())->deliveryCountryId('KP', 1));
+        $this->assertSame(18, (new CartBuilder())->deliveryCountryId('se', 1));
+        $this->assertSame(0, (new CartBuilder())->deliveryCountryId('ZZ', 1));
+    }
+
+    public function test_delivery_country_must_be_enabled_for_the_shop(): void
+    {
+        Country::$unassociated = [[18, 2]];
+
+        $this->assertSame(0, (new CartBuilder())->deliveryCountryId('SE', 2));
+        $this->assertSame(18, (new CartBuilder())->deliveryCountryId('SE', 1));
+    }
+
+    public function test_malformed_delivery_country_is_unresolved_instead_of_failing(): void
+    {
+        $this->assertSame(0, (new CartBuilder())->deliveryCountryId('S;E', 1));
+        $this->assertSame(0, (new CartBuilder())->deliveryCountryId('', 1));
+    }
+
+    public function test_delivery_state_of_another_country_cannot_move_the_shipping_zone(): void
+    {
+        $this->assertSame(0, (new CartBuilder())->deliveryStateId('California', 8));
+        $this->assertSame(0, (new CartBuilder())->deliveryStateId('CA', 8));
+        $this->assertSame(5, (new CartBuilder())->deliveryStateId('California', 21));
+        $this->assertSame(5, (new CartBuilder())->deliveryStateId('CA', 21));
+        $this->assertSame(60, (new CartBuilder())->deliveryStateId('Stockholm', 18));
     }
 
     private function dummySettle(?array $meta): array

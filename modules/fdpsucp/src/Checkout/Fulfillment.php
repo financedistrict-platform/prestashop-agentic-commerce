@@ -49,15 +49,6 @@ final class Fulfillment
             }
         }
 
-        if ($options === []) {
-            $options[] = [
-                'id' => 'free_shipping',
-                'title' => 'Free Shipping',
-                'totals' => [['type' => 'total', 'amount' => 0]],
-            ];
-            $firstId = 'free_shipping';
-        }
-
         $validIds = array_column($options, 'id');
         $effective = ($selectedOptionId && in_array($selectedOptionId, $validIds, true))
             ? $selectedOptionId
@@ -114,18 +105,28 @@ final class Fulfillment
         return preg_match(self::OPTION_ID, $id) === 1 ? $id : null;
     }
 
-    public static function selectionError(\Cart $cart, array $session): ?string
+    public static function coverageError(\Cart $cart): ?string
     {
         if ((int) $cart->id_address_delivery <= 0) {
-            return 'The delivery address of this checkout session could not be resolved';
+            return 'The delivery address is not in a country this shop ships to';
+        }
+        if (!$cart->isVirtualCart() && self::offeredOptionKeys($cart) === []) {
+            return 'No carrier delivers to this address';
+        }
+
+        return null;
+    }
+
+    public static function selectionError(\Cart $cart, array $session): ?string
+    {
+        $coverageError = self::coverageError($cart);
+        if ($coverageError !== null || $cart->isVirtualCart()) {
+            return $coverageError;
         }
         $fulfillment = $session['fulfillment'] ?? null;
         $fulfillment = is_string($fulfillment) ? json_decode($fulfillment, true) : $fulfillment;
         $selected = self::selectedCarrierId(is_array($fulfillment) ? $fulfillment : null);
         $isCarrier = $selected !== null && preg_match(self::OPTION_ID, $selected) === 1;
-        if (!$isCarrier && self::offeredOptionKeys($cart) === []) {
-            return null;
-        }
         if (!$isCarrier || self::appliedOptionId($cart) !== $selected) {
             return 'The selected carrier is not available for this delivery address';
         }
