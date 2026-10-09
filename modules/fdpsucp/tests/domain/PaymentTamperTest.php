@@ -752,7 +752,102 @@ final class PaymentTamperTest extends TestCase
         $this->assertSame(60, (new CartBuilder())->deliveryStateId('Stockholm', 18));
     }
 
-    private const OTHER_SESSION_ID = '0a9c5e21-7d34-4f58-b1a6-93c8d2e47f10';
+    private function buildCartFor(string $email, bool $withAddress = false): Cart
+    {
+        $session = $this->row();
+        $session['buyer'] = json_encode(['email' => $email, 'first_name' => 'Mallory', 'last_name' => 'Buyer']);
+        $fulfillment = json_decode((string) $session['fulfillment'], true);
+        $fulfillment['methods'][0]['destinations'][0]['address_country'] = $withAddress ? 'SE' : '';
+        $session['fulfillment'] = json_encode($fulfillment);
+        Context::getContext()->currency = new Currency(Currency::getIdByIsoCode('EUR'));
+
+        return (new CartBuilder())->build($session, Context::getContext());
+    }
+
+    public function test_buyer_email_of_a_registered_customer_never_attaches_the_cart_to_that_account(): void
+    {
+        Customer::$registered = [42 => 'victim@example.com'];
+
+        $cart = $this->buildCartFor('victim@example.com');
+
+        $this->assertNotSame(42, (int) $cart->id_customer);
+        $this->assertCount(1, Customer::$created);
+        $this->assertSame(1, (int) Customer::$created[0]->is_guest);
+        $this->assertSame((int) Customer::$created[0]->id, (int) $cart->id_customer);
+    }
+
+    public function test_delivery_address_is_never_added_to_a_registered_customers_address_book(): void
+    {
+        Customer::$registered = [42 => 'victim@example.com'];
+
+        $cart = $this->buildCartFor('victim@example.com', true);
+
+        $this->assertNotEmpty(Address::$created);
+        foreach (Address::$created as $address) {
+            $this->assertNotSame(42, (int) $address->id_customer);
+            $this->assertSame((int) $cart->id_customer, (int) $address->id_customer);
+        }
+    }
+
+    public function test_buyer_email_is_matched_case_insensitively_without_attaching_to_a_registered_customer(): void
+    {
+        Customer::$registered = [42 => 'victim@example.com'];
+
+        $cart = $this->buildCartFor('VICTIM@example.com');
+
+        $this->assertNotSame(42, (int) $cart->id_customer);
+    }
+
+    public function test_every_cart_gets_its_own_guest_customer(): void
+    {
+        $first = $this->buildCartFor('buyer@example.com');
+        $second = $this->buildCartFor('buyer@example.com');
+
+        $this->assertNotSame((int) $first->id_customer, (int) $second->id_customer);
+        $this->assertCount(2, Customer::$created);
+    }
+
+    public function test_cart_is_never_built_when_the_guest_customer_cannot_be_created(): void
+    {
+        Customer::$failAdd = true;
+
+        $this->expectException(\RuntimeException::class);
+        $this->buildCartFor('buyer@example.com');
+    }
+
+    private function serviceWithRealCartBuilder(): CheckoutService
+    {
+        $service = $this->service();
+        (new ReflectionProperty(CheckoutService::class, 'cartBuilder'))->setValue($service, new CartBuilder());
+        Product::$prices = [101 => ['EUR' => 18.00]];
+        Context::getContext()->currency = new Currency(Currency::getIdByIsoCode('EUR'));
+
+        return $service;
+    }
+
+    public function test_session_create_is_rejected_cleanly_when_the_guest_customer_cannot_be_created(): void
+    {
+        Customer::$failAdd = true;
+
+        $response = $this->serviceWithRealCartBuilder()->create(['line_items' => [['item' => ['id' => '101'], 'quantity' => 2]]], null);
+
+        $this->assertSame(422, $response->status);
+        $this->assertSame('cart_build_failed', $response->body['messages'][0]['code']);
+    }
+
+    public function test_session_update_is_rejected_cleanly_when_the_guest_customer_cannot_be_created(): void
+    {
+        Customer::$failAdd = true;
+        $before = $this->row();
+
+        $response = $this->serviceWithRealCartBuilder()->update(self::SESSION_ID, ['line_items' => [['item' => ['id' => '101'], 'quantity' => 2]]]);
+
+        $this->assertSame(422, $response->status);
+        $this->assertSame('cart_build_failed', $response->body['messages'][0]['code']);
+        $this->assertSame($before['totals'], $this->row()['totals']);
+    }
+
+    private const OTHER_SESSION_ID ='0a9c5e21-7d34-4f58-b1a6-93c8d2e47f10';
     private const KEY = 'idem-key-1';
 
     private function claimKey(string $status = 'incomplete', ?string $secretHash = null): void

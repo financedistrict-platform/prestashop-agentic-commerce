@@ -507,7 +507,14 @@ final class CheckoutService
      */
     private function priceAndFulfill(array $provisional, array $formatted, ?array $inputFulfillment): array|Response
     {
-        $cart = $this->cartBuilder->build($provisional, $this->context);
+        try {
+            $cart = $this->cartBuilder->build($provisional, $this->context);
+        } catch (\UnexpectedValueException $e) {
+            return UcpError::response('invalid_currency', $e->getMessage(), 422);
+        } catch (\Throwable $e) {
+            \PrestaShopLogger::addLog('[FD UCP] Cart build failed: ' . $e->getMessage(), 3);
+            return UcpError::response('cart_build_failed', 'Could not build the cart for this session', 422);
+        }
 
         $dest = $inputFulfillment['methods'][0]['destinations'][0] ?? null;
         if (!is_array($dest) || empty($dest['address_country'])) {

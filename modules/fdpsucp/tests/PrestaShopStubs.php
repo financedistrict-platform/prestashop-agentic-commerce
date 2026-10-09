@@ -118,12 +118,82 @@ class PaymentModule extends Module
 
 class Customer
 {
+    public static array $registered = [];
+    public static array $created = [];
+    public static int $nextId = 900;
+    public static bool $failAdd = false;
+
     public $id;
     public $secure_key = 'secure';
+    public $is_guest = 0;
+    public $id_shop;
+    public $id_lang;
+    public $email = '';
+    public $firstname = '';
+    public $lastname = '';
+    public $passwd = '';
 
     public function __construct($id = null)
     {
         $this->id = $id;
+        if ($id !== null && isset(self::$registered[(int) $id])) {
+            $this->email = self::$registered[(int) $id];
+        }
+    }
+
+    public static function customerExists($email, $returnId = false, $ignoreGuest = true)
+    {
+        foreach (self::$registered as $id => $registeredEmail) {
+            if (strcasecmp($registeredEmail, (string) $email) === 0) {
+                return (int) $id;
+            }
+        }
+
+        return 0;
+    }
+
+    public function add(): bool
+    {
+        if (self::$failAdd) {
+            return false;
+        }
+        $this->id = self::$nextId++;
+        self::$created[] = $this;
+
+        return true;
+    }
+}
+
+class Address
+{
+    public static array $created = [];
+
+    public $id;
+    public $id_customer;
+    public $id_country;
+    public $id_state;
+    public $alias;
+    public $firstname;
+    public $lastname;
+    public $address1;
+    public $address2;
+    public $city;
+    public $postcode;
+
+    public function add(): bool
+    {
+        $this->id = 700 + count(self::$created);
+        self::$created[] = $this;
+
+        return true;
+    }
+}
+
+class Tools
+{
+    public static function hash($value): string
+    {
+        return hash('sha256', (string) $value);
     }
 }
 
@@ -234,6 +304,7 @@ class State
 class Shop
 {
     public $id = 1;
+    public $id_shop_group = 1;
 }
 
 class Language
@@ -248,9 +319,13 @@ class Context
     public $currency;
     public $shop;
     public $language;
+    public $cookie;
+    public $cart;
 
     public function __construct()
     {
+        $this->cookie = new stdClass();
+        $this->cookie->id_guest = 0;
         $this->currency = new Currency();
         $this->shop = new Shop();
         $this->language = new Language();
@@ -297,6 +372,11 @@ class Validate
         return is_object($object) && !empty($object->id);
     }
 
+    public static function isEmail($email)
+    {
+        return filter_var($email, FILTER_VALIDATE_EMAIL) !== false;
+    }
+
     public static function isLanguageIsoCode($isoCode)
     {
         return preg_match('/^[a-zA-Z]{2,3}$/', (string) $isoCode);
@@ -309,8 +389,17 @@ class Cart
     public const BOTH = 3;
     public const ONLY_SHIPPING = 5;
 
+    public static array $added = [];
+
     public $id = 77;
+    public $id_shop;
+    public $id_shop_group;
+    public $id_lang;
+    public $id_guest;
+    public $recyclable;
+    public $gift;
     public $id_customer = 5;
+    public $id_address_invoice = 0;
     public $id_currency = 1;
     public $id_address_delivery = 0;
     public array $orderTotals = [self::ONLY_PRODUCTS => 42.00, self::ONLY_SHIPPING => 4.95, self::BOTH => 46.95];
@@ -324,6 +413,18 @@ class Cart
     public bool $saves = true;
     public array $carrierTotals = [];
     public bool $virtual = false;
+
+    public function add(): bool
+    {
+        self::$added[] = $this;
+
+        return true;
+    }
+
+    public function updateQty($quantity, $idProduct, $idProductAttribute = null)
+    {
+        return true;
+    }
 
     public function isVirtualCart()
     {
@@ -392,6 +493,11 @@ final class FdTestStubs
         Country::$inactive = [];
         Country::$unassociated = [];
         Context::$instance = null;
+        Customer::$registered = [];
+        Customer::$created = [];
+        Customer::$failAdd = false;
+        Address::$created = [];
+        Cart::$added = [];
         PrestaShopLogger::$logs = [];
         \FD\PrismUcp\Ucp\RequestContext::set(null);
         \FD\PrismUcp\Ucp\AgentProfileFetcher::resetCache();

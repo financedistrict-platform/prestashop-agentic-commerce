@@ -153,12 +153,6 @@ class CartBuilder
     private function resolveGuestCustomer(array $buyer, int $idShop, int $idLang): \Customer
     {
         $email = (string) ($buyer['email'] ?? '');
-        if ($email !== '' && \Validate::isEmail($email)) {
-            $existingId = (int) \Customer::customerExists($email, true, true);
-            if ($existingId > 0) {
-                return new \Customer($existingId);
-            }
-        }
 
         $customer = new \Customer();
         $customer->is_guest = 1;
@@ -170,7 +164,9 @@ class CartBuilder
         $customer->firstname = (string) ($buyer['first_name'] ?? 'Agent');
         $customer->lastname = (string) ($buyer['last_name'] ?? 'Buyer');
         $customer->passwd = \Tools::hash(uniqid('ucp', true));
-        $customer->add();
+        if (!$customer->add()) {
+            throw new \RuntimeException('The guest customer could not be created');
+        }
 
         return $customer;
     }
