@@ -113,6 +113,8 @@ final class FdTestX402
     public const OTHER_ASSET = '0x9999999999999999999999999999999999999999';
     public const NETWORK = 'eip155:84532';
     public const RESOURCE = 'https://shop.example/checkout-sessions/s1';
+    public const SESSION_UID = '5f0c2a8e-3b1d-4c6e-9a7f-2d4b8e1c0a91';
+    public const OTHER_SESSION_UID = '0a9c5e21-7d34-4f58-b1a6-93c8d2e47f10';
 
     public static function accept(string $amount): array
     {
@@ -136,7 +138,7 @@ final class FdTestX402
         ];
     }
 
-    public static function credential(string $amount): array
+    public static function credential(string $amount, ?string $nonce = null, ?string $payer = null): array
     {
         return [
             'type' => 'x402',
@@ -147,12 +149,12 @@ final class FdTestX402
                 'payload' => [
                     'signature' => '0x' . str_repeat('cd', 65),
                     'authorization' => [
-                        'from' => self::PAYER,
+                        'from' => $payer ?? self::PAYER,
                         'to' => self::PAY_TO,
                         'value' => $amount,
                         'validAfter' => '0',
                         'validBefore' => (string) (time() + 300),
-                        'nonce' => '0x' . str_repeat('ab', 32),
+                        'nonce' => $nonce ?? '0x' . str_repeat('ab', 32),
                     ],
                 ],
             ],

@@ -4,12 +4,15 @@ declare(strict_types=1);
 
 use FD\PrismDummy\DummyGate;
 use FD\PrismDummy\DummyHandler;
+use FD\PrismUcp\Cart\CartRepository;
+use FD\PrismUcp\Cart\CartService;
 use FD\PrismUcp\Checkout\CartBuilder;
 use FD\PrismUcp\Checkout\CheckoutService;
 use FD\PrismUcp\Http\Response;
 use FD\PrismUcp\Payment\PaymentIntegrity;
 use FD\PrismUcp\Payment\PaymentRegistry;
 use FD\PrismUcp\Ucp\VersionRegistry;
+use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 
 if (!defined('_PS_MODE_DEV_')) {
@@ -847,6 +850,224 @@ final class PaymentTamperTest extends TestCase
         $this->assertSame($before['totals'], $this->row()['totals']);
     }
 
+    public static function unusableQuantities(): array
+    {
+        return [
+            'above the cap' => [1001],
+            'above the cap as text' => ['1001'],
+            'fractional' => [2.5],
+            'fractional text' => ['2.5'],
+            'exponent text' => ['1e3'],
+            'list' => [[2]],
+            'boolean' => [true],
+            'negative' => [-3],
+            'zero' => [0],
+            'int max' => [PHP_INT_MAX],
+            'huge text' => ['99999999999999999999'],
+        ];
+    }
+
+    #[DataProvider('unusableQuantities')]
+    public function test_session_create_rejects_an_unusable_line_quantity(mixed $quantity): void
+    {
+        $response = $this->serviceWithRealCartBuilder()->create(['line_items' => [['item' => ['id' => '101'], 'quantity' => $quantity]]], null);
+
+        $this->assertSame(422, $response->status, (string) json_encode($response->body));
+        $this->assertSame('invalid_quantity', $response->body['messages'][0]['code']);
+        $this->assertCount(1, $this->sessions->rows);
+    }
+
+    #[DataProvider('unusableQuantities')]
+    public function test_session_update_rejects_an_unusable_line_quantity(mixed $quantity): void
+    {
+        $before = $this->row();
+
+        $response = $this->serviceWithRealCartBuilder()->update(self::SESSION_ID, ['line_items' => [['item' => ['id' => '101'], 'quantity' => $quantity]]]);
+
+        $this->assertSame(422, $response->status, (string) json_encode($response->body));
+        $this->assertSame('invalid_quantity', $response->body['messages'][0]['code']);
+        $this->assertSame($before['totals'], $this->row()['totals']);
+        $this->assertSame($before['line_items'], $this->row()['line_items']);
+    }
+
+    #[DataProvider('unusableQuantities')]
+    public function test_cart_create_rejects_an_unusable_line_quantity(mixed $quantity): void
+    {
+        $carts = new FdTestMemoryCarts();
+        $response = $this->cartService($carts)->create(['line_items' => [['item' => ['id' => '101'], 'quantity' => $quantity]]], null);
+
+        $this->assertSame(422, $response->status, (string) json_encode($response->body));
+        $this->assertSame('invalid_quantity', $response->body['messages'][0]['code']);
+        $this->assertSame([], $carts->rows);
+    }
+
+    public function test_line_quantity_at_the_cap_is_accepted(): void
+    {
+        $response = $this->serviceWithRealCartBuilder()->create(['line_items' => [['item' => ['id' => '101'], 'quantity' => 1000]]], null);
+
+        $this->assertSame(201, $response->status, (string) json_encode($response->body));
+    }
+
+    public function test_line_quantity_given_as_whole_text_is_accepted(): void
+    {
+        $response = $this->serviceWithRealCartBuilder()->create(['line_items' => [['item' => ['id' => '101'], 'quantity' => '2']]], null);
+
+        $this->assertSame(201, $response->status, (string) json_encode($response->body));
+        $this->assertSame(2, $response->body['line_items'][0]['quantity']);
+    }
+
+    public function test_cart_build_never_drops_a_line_with_an_unusable_quantity(): void
+    {
+        $session = $this->row();
+        $session['line_items'] = json_encode([['item' => ['id' => '101'], 'quantity' => 5000]]);
+        Context::getContext()->currency = new Currency(Currency::getIdByIsoCode('EUR'));
+
+        $this->expectException(\RuntimeException::class);
+        (new CartBuilder())->build($session, Context::getContext());
+    }
+
+    private function cartService(FdTestMemoryCarts $carts): CartService
+    {
+        $registry = new PaymentRegistry();
+        $registry->register($this->handler);
+        $service = new CartService(Context::getContext(), $registry, FdTestGoldenRenderer::ENDPOINT, hash('sha256', ''), self::SECRET);
+        (new ReflectionProperty(CartService::class, 'carts'))->setValue($service, $carts);
+        Product::$prices = [101 => ['EUR' => 18.00], 205 => ['EUR' => 6.00]];
+        Context::getContext()->currency = new Currency(Currency::getIdByIsoCode('EUR'));
+
+        return $service;
+    }
+
+    public static function foreignVariants(): array
+    {
+        return [
+            'variant of another product' => ['101', '12'],
+            'variant that does not exist' => ['101', '999'],
+            'variant that is not a number' => ['101', 'abc'],
+            'variant with trailing text' => ['101', '11abc'],
+            'negative variant' => ['101', '-11'],
+            'list variant' => ['101', ['11']],
+        ];
+    }
+
+    #[DataProvider('foreignVariants')]
+    public function test_session_create_rejects_a_variant_that_is_not_a_combination_of_the_product(string $product, mixed $variant): void
+    {
+        $response = $this->serviceWithRealCartBuilder()->create(['line_items' => [['item' => ['id' => $product, 'variant_id' => $variant], 'quantity' => 1]]], null);
+
+        $this->assertSame(422, $response->status, (string) json_encode($response->body));
+        $this->assertSame('invalid_variant', $response->body['messages'][0]['code']);
+        $this->assertCount(1, $this->sessions->rows);
+    }
+
+    #[DataProvider('foreignVariants')]
+    public function test_session_update_rejects_a_variant_that_is_not_a_combination_of_the_product(string $product, mixed $variant): void
+    {
+        $before = $this->row();
+
+        $response = $this->serviceWithRealCartBuilder()->update(self::SESSION_ID, ['line_items' => [['item' => ['id' => $product, 'variant_id' => $variant], 'quantity' => 1]]]);
+
+        $this->assertSame(422, $response->status, (string) json_encode($response->body));
+        $this->assertSame('invalid_variant', $response->body['messages'][0]['code']);
+        $this->assertSame($before['line_items'], $this->row()['line_items']);
+    }
+
+    #[DataProvider('foreignVariants')]
+    public function test_cart_create_rejects_a_variant_that_is_not_a_combination_of_the_product(string $product, mixed $variant): void
+    {
+        $carts = new FdTestMemoryCarts();
+        $response = $this->cartService($carts)->create(['line_items' => [['item' => ['id' => $product, 'variant_id' => $variant], 'quantity' => 1]]], null);
+
+        $this->assertSame(422, $response->status, (string) json_encode($response->body));
+        $this->assertSame('invalid_variant', $response->body['messages'][0]['code']);
+        $this->assertSame([], $carts->rows);
+    }
+
+    public function test_variant_of_the_product_is_accepted_and_kept_on_the_line(): void
+    {
+        $response = $this->serviceWithRealCartBuilder()->create(['line_items' => [['item' => ['id' => '101', 'variant_id' => '11'], 'quantity' => 1]]], null);
+
+        $this->assertSame(201, $response->status, (string) json_encode($response->body));
+        $this->assertSame('11', $response->body['line_items'][0]['item']['variant_id']);
+    }
+
+    public static function malformedProducts(): array
+    {
+        return [
+            'product that is not a number' => ['abc'],
+            'product with trailing text' => ['101abc'],
+            'product zero' => ['0'],
+            'list product' => [['101']],
+        ];
+    }
+
+    #[DataProvider('malformedProducts')]
+    public function test_session_create_rejects_a_malformed_product_id(mixed $product): void
+    {
+        $response = $this->serviceWithRealCartBuilder()->create(['line_items' => [['item' => ['id' => $product], 'quantity' => 1]]], null);
+
+        $this->assertSame(422, $response->status, (string) json_encode($response->body));
+        $this->assertSame('invalid_product', $response->body['messages'][0]['code']);
+    }
+
+    public function test_session_create_is_rejected_when_the_cart_refuses_a_line(): void
+    {
+        Cart::$rejectQuantity = true;
+
+        $response = $this->serviceWithRealCartBuilder()->create(['line_items' => [['item' => ['id' => '101'], 'quantity' => 2]]], null);
+
+        $this->assertSame(422, $response->status, (string) json_encode($response->body));
+        $this->assertSame('cart_build_failed', $response->body['messages'][0]['code']);
+        $this->assertCount(1, $this->sessions->rows);
+    }
+
+    public function test_session_update_is_rejected_when_the_cart_refuses_a_line(): void
+    {
+        Cart::$rejectQuantity = true;
+        $before = $this->row();
+
+        $response = $this->serviceWithRealCartBuilder()->update(self::SESSION_ID, ['line_items' => [['item' => ['id' => '101'], 'quantity' => 2]]]);
+
+        $this->assertSame(422, $response->status, (string) json_encode($response->body));
+        $this->assertSame('cart_build_failed', $response->body['messages'][0]['code']);
+        $this->assertSame($before['totals'], $this->row()['totals']);
+    }
+
+    public function test_completion_is_rejected_and_released_when_the_cart_refuses_a_line(): void
+    {
+        Cart::$rejectQuantity = true;
+
+        $response = $this->serviceWithRealCartBuilder()->complete(self::SESSION_ID, ['payment' => ['instruments' => [self::INSTRUMENT]]], null);
+
+        $this->assertSame(422, $response->status, (string) json_encode($response->body));
+        $this->assertSame('cart_build_failed', $response->body['messages'][0]['code']);
+        $this->assertSame('incomplete', $this->row()['status']);
+        $this->assertSame([], $this->handler->settled);
+    }
+
+    public function test_cart_build_never_drops_a_line_without_a_product(): void
+    {
+        $session = $this->row();
+        $session['line_items'] = json_encode([['item' => ['id' => '0'], 'quantity' => 1]]);
+        Context::getContext()->currency = new Currency(Currency::getIdByIsoCode('EUR'));
+
+        $this->expectException(\RuntimeException::class);
+        (new CartBuilder())->build($session, Context::getContext());
+    }
+
+    public function test_cart_build_fails_when_the_delivery_address_cannot_be_saved(): void
+    {
+        Address::$failAdd = true;
+        $session = $this->row();
+        Context::getContext()->currency = new Currency(Currency::getIdByIsoCode('EUR'));
+        $fulfillment = json_decode((string) $session['fulfillment'], true);
+        $fulfillment['methods'][0]['destinations'][0]['address_country'] = 'SE';
+        $session['fulfillment'] = json_encode($fulfillment);
+
+        $this->expectException(\RuntimeException::class);
+        (new CartBuilder())->build($session, Context::getContext());
+    }
+
     private const OTHER_SESSION_ID ='0a9c5e21-7d34-4f58-b1a6-93c8d2e47f10';
     private const KEY = 'idem-key-1';
 
@@ -1059,6 +1280,27 @@ final class PaymentTamperTest extends TestCase
 
         $this->assertFalse($result['success']);
         $this->assertSame([], $validated);
+    }
+}
+
+final class FdTestMemoryCarts extends CartRepository
+{
+    public array $rows = [];
+
+    public function __construct()
+    {
+    }
+
+    public function insert(array $data): bool
+    {
+        $this->rows[$data['cart_uid']] = $data;
+
+        return true;
+    }
+
+    public function findByUid(string $uid, int $idShop): ?array
+    {
+        return $this->rows[$uid] ?? null;
     }
 }
 

@@ -366,7 +366,13 @@ class FdPsUcp extends Module
 
         return (bool) Db::getInstance()->execute($sessionSql)
             && (bool) Db::getInstance()->execute($cartSql)
-            && (bool) Db::getInstance()->execute($rateSql);
+            && (bool) Db::getInstance()->execute($rateSql)
+            && $this->installReplayTable();
+    }
+
+    public function installReplayTable(): bool
+    {
+        return (bool) Db::getInstance()->execute(\FD\PrismUcp\Payment\DbReplayLedger::createSql(_MYSQL_ENGINE_));
     }
 
     private function uninstallDb(): bool
@@ -374,6 +380,7 @@ class FdPsUcp extends Module
         // Keep order data; only drop our own tables.
         return (bool) Db::getInstance()->execute('DROP TABLE IF EXISTS `' . _DB_PREFIX_ . 'prism_session`')
             && (bool) Db::getInstance()->execute('DROP TABLE IF EXISTS `' . _DB_PREFIX_ . 'prism_cart`')
-            && (bool) Db::getInstance()->execute('DROP TABLE IF EXISTS `' . _DB_PREFIX_ . 'prism_rate_limit`');
+            && (bool) Db::getInstance()->execute('DROP TABLE IF EXISTS `' . _DB_PREFIX_ . 'prism_rate_limit`')
+            && (bool) Db::getInstance()->execute('DROP TABLE IF EXISTS `' . _DB_PREFIX_ . \FD\PrismUcp\Payment\DbReplayLedger::TABLE . '`');
     }
 }
