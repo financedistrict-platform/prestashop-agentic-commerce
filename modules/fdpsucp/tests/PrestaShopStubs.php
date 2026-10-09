@@ -140,7 +140,27 @@ class Order
 
 class Currency
 {
+    public static array $ids = ['EUR' => 1, 'KWD' => 2];
+    public static array $deleted = [];
+    public static array $inactive = [];
+
+    public $id = 1;
     public $iso_code = 'EUR';
+    public $active = true;
+
+    public function __construct($id = null, $idLang = null, $idShop = null)
+    {
+        if ($id !== null) {
+            $this->id = in_array((int) $id, self::$deleted, true) ? null : (int) $id;
+            $this->iso_code = (string) array_search((int) $id, self::$ids, true);
+            $this->active = !in_array((int) $id, self::$inactive, true);
+        }
+    }
+
+    public static function getIdByIsoCode($isoCode, $idShop = 0)
+    {
+        return self::$ids[$isoCode] ?? 0;
+    }
 }
 
 class Shop
@@ -191,7 +211,9 @@ class Product
 
     public static function getPriceStatic($idProduct, $usetax = true, $idProductAttribute = null)
     {
-        return self::$prices[(int) $idProduct] ?? 0.0;
+        $price = self::$prices[(int) $idProduct] ?? 0.0;
+
+        return is_array($price) ? ($price[Context::getContext()->currency->iso_code] ?? 0.0) : $price;
     }
 
     public static function isAvailableWhenOutOfStock($outOfStock): bool
@@ -257,6 +279,8 @@ final class FdTestStubs
         Module::$hooks = [];
         Db::$statements = [];
         Product::$prices = [];
+        Currency::$deleted = [];
+        Currency::$inactive = [];
         Context::$instance = null;
         PrestaShopLogger::$logs = [];
         \FD\PrismUcp\Ucp\RequestContext::set(null);
