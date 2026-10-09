@@ -169,6 +169,22 @@ final class PaymentTamperTest extends TestCase
         $this->assertSame([], $this->handler->settled);
     }
 
+    public function test_update_after_a_requote_keeps_the_order_cart_quote(): void
+    {
+        $this->cart->id_address_delivery = 9;
+        $this->cart->products[0]['price_wt'] = 18.75;
+        $this->cart->orderTotals = [Cart::ONLY_PRODUCTS => 43.50, Cart::ONLY_SHIPPING => 4.95, Cart::BOTH => 48.45];
+        $this->assertSame(409, $this->complete()->status);
+
+        $update = $this->service()->update(self::SESSION_ID, ['buyer' => ['first_name' => 'Anne']]);
+
+        $this->assertSame(200, $update->status, (string) json_encode($update->body));
+        $this->assertSame(4845, PaymentIntegrity::quotedTotal($this->row()));
+        $response = $this->complete();
+        $this->assertSame(200, $response->status, (string) json_encode($response->body));
+        $this->assertSame(4845, $this->handler->settled[0]['paid_amount'] ?? null);
+    }
+
     private function updateUnderRequestCurrency(string $requestIso, array $body): Response
     {
         Product::$prices = [101 => ['EUR' => 18.00, 'KWD' => 6.00]];
@@ -288,6 +304,118 @@ final class PaymentTamperTest extends TestCase
         $this->assertSame(422, $response->status, (string) json_encode($response->body));
         $this->assertSame('invalid_currency', $response->body['messages'][0]['code']);
         $this->assertSame($rows, $this->sessions->rows);
+    }
+
+    private const SWEDEN = ['methods' => [['destinations' => [[
+        'street_address' => 'Drottninggatan 1',
+        'address_locality' => 'Stockholm',
+        'postal_code' => '11122',
+        'address_country' => 'SE',
+    ]]]]];
+
+    private function shipToHigherVatCountry(): CheckoutService
+    {
+        Product::$prices = [101 => 17.85];
+        $this->cart->id_address_delivery = 9;
+        $this->cart->products = [['id_product' => 101, 'id_product_attribute' => 0, 'cart_quantity' => 2, 'price_wt' => 18.75, 'total_wt' => 37.50]];
+        $this->cart->orderTotals = [Cart::ONLY_PRODUCTS => 37.50, Cart::ONLY_SHIPPING => 4.95, Cart::BOTH => 42.45];
+        $registry = new PaymentRegistry();
+        $registry->register($this->handler);
+        $service = new CheckoutService(Context::getContext(), $registry, FdTestGoldenRenderer::ENDPOINT, hash('sha256', ''), self::SECRET);
+        (new ReflectionProperty(CheckoutService::class, 'sessions'))->setValue($service, $this->sessions);
+        (new ReflectionProperty(CheckoutService::class, 'cartBuilder'))->setValue($service, new FdTestFixedCartBuilder($this->cart));
+
+        return $service;
+    }
+
+    private function assertQuotedAtDestinationTax(array $row): void
+    {
+        $lines = json_decode($row['line_items'], true);
+        $this->assertSame(1875, $lines[0]['item']['price']);
+        $this->assertSame([['type' => 'subtotal', 'amount' => 3750], ['type' => 'total', 'amount' => 3750]], $lines[0]['totals']);
+        $this->assertSame(
+            [['type' => 'subtotal', 'amount' => 3750], ['type' => 'fulfillment', 'amount' => 495], ['type' => 'total', 'amount' => 4245]],
+            json_decode($row['totals'], true)
+        );
+        $this->assertSame(4245, end($this->handler->prepared)['total']);
+    }
+
+    public function test_session_update_quotes_the_tax_of_the_delivery_country(): void
+    {
+        $response = $this->shipToHigherVatCountry()->update(self::SESSION_ID, [
+            'line_items' => [['item' => ['id' => '101'], 'quantity' => 2]],
+            'fulfillment' => self::SWEDEN,
+        ]);
+
+        $this->assertSame(200, $response->status, (string) json_encode($response->body));
+        $this->assertQuotedAtDestinationTax($this->row());
+    }
+
+    public function test_session_create_quotes_the_tax_of_the_delivery_country(): void
+    {
+        $response = $this->shipToHigherVatCountry()->create([
+            'line_items' => [['item' => ['id' => '101'], 'quantity' => 2]],
+            'fulfillment' => self::SWEDEN,
+        ], null);
+
+        $this->assertSame(201, $response->status, (string) json_encode($response->body));
+        $this->assertQuotedAtDestinationTax($this->sessions->rows[$response->body['id']]);
+    }
+
+    public function test_session_update_is_rejected_when_the_delivery_cart_misses_a_line_item(): void
+    {
+        $service = $this->shipToHigherVatCountry();
+        $this->cart->products = [];
+        $before = $this->row();
+
+        $response = $service->update(self::SESSION_ID, [
+            'line_items' => [['item' => ['id' => '101'], 'quantity' => 2]],
+            'fulfillment' => self::SWEDEN,
+        ]);
+
+        $this->assertSame(422, $response->status, (string) json_encode($response->body));
+        $this->assertSame('cart_mismatch', $response->body['messages'][0]['code']);
+        $this->assertSame($before, $this->row());
+        $this->assertSame([], $this->handler->prepared);
+    }
+
+    public function test_completion_is_rejected_when_the_order_cart_misses_a_line_item(): void
+    {
+        $this->cart->products = [$this->cart->products[0]];
+        $this->cart->orderTotals = [Cart::ONLY_PRODUCTS => 36.00, Cart::ONLY_SHIPPING => 4.95, Cart::BOTH => 40.95];
+        $quoted = $this->row()['totals'];
+
+        $response = $this->complete();
+
+        $this->assertSame(422, $response->status, (string) json_encode($response->body));
+        $this->assertSame('cart_mismatch', $response->body['messages'][0]['code']);
+        $this->assertSame([], $this->handler->settled);
+        $this->assertSame('incomplete', $this->row()['status']);
+        $this->assertSame($quoted, $this->row()['totals']);
+    }
+
+    public function test_requote_stores_the_order_cart_line_prices(): void
+    {
+        $this->cart->products[0]['price_wt'] = 18.75;
+        $this->cart->orderTotals = [Cart::ONLY_PRODUCTS => 43.50, Cart::ONLY_SHIPPING => 4.95, Cart::BOTH => 48.45];
+
+        $response = $this->complete();
+
+        $this->assertSame(409, $response->status, (string) json_encode($response->body));
+        $lines = json_decode($this->row()['line_items'], true);
+        $this->assertSame(1875, $lines[0]['item']['price']);
+        $this->assertSame([['type' => 'subtotal', 'amount' => 3750], ['type' => 'total', 'amount' => 3750]], $lines[0]['totals']);
+    }
+
+    public function test_cart_line_without_a_tax_inclusive_price_is_rejected(): void
+    {
+        unset($this->cart->products[1]['price_wt']);
+
+        $response = $this->complete();
+
+        $this->assertSame(422, $response->status, (string) json_encode($response->body));
+        $this->assertSame('cart_mismatch', $response->body['messages'][0]['code']);
+        $this->assertSame([], $this->handler->settled);
     }
 
     private function dummySettle(?array $meta): array

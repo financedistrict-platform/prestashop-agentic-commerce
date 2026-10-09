@@ -148,6 +148,7 @@ final class BackCompatOriginalAgentTest extends TestCase
 final class FdTestRecordingPrismHandler implements PaymentHandlerInterface
 {
     public array $settled = [];
+    public array $prepared = [];
 
     public function __construct(private bool $throws = false, private bool $prepareThrows = false)
     {

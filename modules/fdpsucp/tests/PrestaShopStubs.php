@@ -241,14 +241,13 @@ class Cart
     public $id_currency = 1;
     public $id_address_delivery = 0;
     public array $orderTotals = [self::ONLY_PRODUCTS => 42.00, self::ONLY_SHIPPING => 4.95, self::BOTH => 46.95];
+    public array $products = [
+        ['id_product' => 101, 'id_product_attribute' => 0, 'cart_quantity' => 2, 'price_wt' => 18.00, 'total_wt' => 36.00],
+        ['id_product' => 205, 'id_product_attribute' => 0, 'cart_quantity' => 1, 'price_wt' => 6.00, 'total_wt' => 6.00],
+    ];
 
     public ?array $deliveryOption = null;
     public array $carrierTotals = [];
-
-    public function getDeliveryOptionList()
-    {
-        return [];
-    }
 
     public function getOrderTotal($withTaxes = true, $type = self::BOTH)
     {
@@ -267,6 +266,16 @@ class Cart
     public function update($nullValues = false)
     {
         return true;
+    }
+
+    public function getProducts($refresh = false)
+    {
+        return $this->products;
+    }
+
+    public function getDeliveryOptionList()
+    {
+        return [];
     }
 }
 
