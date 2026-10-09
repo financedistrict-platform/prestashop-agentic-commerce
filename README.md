@@ -252,6 +252,24 @@ All shopping endpoints are served under `/module/fdpsucp/api` (advertised as the
 | `POST` | `/module/fdpsucp/api/checkout-sessions/{id}/complete` | Complete with payment credential |
 | `POST` | `/module/fdpsucp/api/checkout-sessions/{id}/cancel` | Cancel session |
 
+### Checkout errors
+
+Complete and update can answer with these codes. The agent should fetch the session and act on the code.
+
+| Status | Code | Meaning | Agent action |
+|--------|------|---------|--------------|
+| 409 | `quote_changed` | The order total no longer equals the quote. The session was re-quoted. | Fetch the session, sign the new `payment_meta`, complete again |
+| 409 | `quote_expired` | The quote is older than 30 minutes. The session was re-quoted. | Same as above |
+| 409 | `idempotency_key_reused` | On complete, the key is already bound to a different session | Use a new key |
+| 422 | `carrier_unavailable` | The selected carrier is not offered for the address, or no carrier serves it | Update the session and pick a carrier |
+| 422 | `cart_mismatch` | The cart for the delivery address does not hold exactly the requested lines | Update the session |
+| 422 | `invalid_currency` | The session currency is not an active currency of the shop | Create a new session |
+| 422 | `invalid_product`, `invalid_variant`, `invalid_quantity` | A line item failed validation (quantity is 1 to 1000) | Fix the line item |
+| 422 | `requote_failed` | The re-quote could not be prepared. The session is back to `incomplete`. | Retry later |
+| 422 | `payment_failed` | The payment was refused: amount, replay, settlement or order placement | Do not retry the same authorization |
+
+Replaying an `Idempotency-Key` returns the existing session without a new capability secret.
+
 ### Orders
 
 | Method | Endpoint | Description |
@@ -297,8 +315,11 @@ interface PaymentHandlerInterface
     public function prepareCheckoutPayment(array $input): ?array;       // called when a session is created
     public function settlePayment(array $input): array;                 // called on complete with the credential
     public function getUcpCheckoutHandlers(?array $paymentMeta = null): array; // shapes the checkout response
+    public function preparedAmount(?array $checkoutMeta): ?int;        // amount prepared at session creation, in minor units
 }
 ```
+
+`preparedAmount` is required. The core settles only when the stored quote, the order cart total and this amount are equal, then passes the verified amount to `settlePayment` as `paid_amount`. A handler that does not implement it fails when the class loads.
 
 See [`modules/fdpsdummy`](modules/fdpsdummy) for a minimal working example.
 
