@@ -141,15 +141,19 @@ class Order
 class Currency
 {
     public static array $ids = ['EUR' => 1, 'KWD' => 2];
+    public static array $deleted = [];
+    public static array $inactive = [];
 
     public $id = 1;
     public $iso_code = 'EUR';
+    public $active = true;
 
     public function __construct($id = null, $idLang = null, $idShop = null)
     {
         if ($id !== null) {
-            $this->id = (int) $id;
-            $this->iso_code = (string) array_search($this->id, self::$ids, true);
+            $this->id = in_array((int) $id, self::$deleted, true) ? null : (int) $id;
+            $this->iso_code = (string) array_search((int) $id, self::$ids, true);
+            $this->active = !in_array((int) $id, self::$inactive, true);
         }
     }
 
@@ -275,6 +279,8 @@ final class FdTestStubs
         Module::$hooks = [];
         Db::$statements = [];
         Product::$prices = [];
+        Currency::$deleted = [];
+        Currency::$inactive = [];
         Context::$instance = null;
         PrestaShopLogger::$logs = [];
         \FD\PrismUcp\Ucp\RequestContext::set(null);

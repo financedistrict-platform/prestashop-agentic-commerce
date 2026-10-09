@@ -78,7 +78,12 @@ final class CheckoutService
         }
 
         $idLang = (int) $this->context->language->id;
-        $currency = $this->context->currency->iso_code;
+        $currency = (string) $this->context->currency->iso_code;
+        try {
+            $this->cartBuilder->pinCurrency(['id_shop' => $this->idShop(), 'currency' => $currency], $this->context);
+        } catch (\UnexpectedValueException $e) {
+            return UcpError::response('invalid_currency', $e->getMessage(), 422);
+        }
 
         $formatted = [];
         foreach ($lineItems as $item) {
@@ -375,6 +380,13 @@ final class CheckoutService
             return UcpError::response('session_in_progress', 'Session is already being completed', 409);
         }
         $session = $this->sessions->findByUid($uid, $this->idShop()) ?? $session;
+
+        try {
+            $this->cartBuilder->pinCurrency($session, $this->context);
+        } catch (\UnexpectedValueException $e) {
+            $this->sessions->update($uid, $this->idShop(), ['status' => 'incomplete']);
+            return UcpError::response('invalid_currency', $e->getMessage(), 422);
+        }
 
         try {
             $cart = $this->cartBuilder->build($session, $this->context);

@@ -206,6 +206,90 @@ final class PaymentTamperTest extends TestCase
         $this->assertSame($before, $this->row());
     }
 
+    public function test_session_currency_that_no_longer_loads_is_rejected(): void
+    {
+        Currency::$deleted = [1];
+        $before = $this->row();
+
+        $response = $this->updateUnderRequestCurrency('KWD', ['line_items' => [['item' => ['id' => '101'], 'quantity' => 2]]]);
+
+        $this->assertSame(422, $response->status, (string) json_encode($response->body));
+        $this->assertSame('invalid_currency', $response->body['messages'][0]['code']);
+        $this->assertSame($before, $this->row());
+    }
+
+    public function test_inactive_session_currency_is_rejected(): void
+    {
+        Currency::$inactive = [1];
+        $before = $this->row();
+
+        $response = $this->updateUnderRequestCurrency('KWD', ['line_items' => [['item' => ['id' => '101'], 'quantity' => 2]]]);
+
+        $this->assertSame(422, $response->status, (string) json_encode($response->body));
+        $this->assertSame('invalid_currency', $response->body['messages'][0]['code']);
+        $this->assertSame($before, $this->row());
+    }
+
+    public function test_completion_prices_the_order_in_the_session_currency_not_the_request_currency(): void
+    {
+        Context::getContext()->currency = new Currency(Currency::getIdByIsoCode('KWD'));
+
+        $response = $this->complete();
+
+        $this->assertSame(200, $response->status, (string) json_encode($response->body));
+        $this->assertCount(1, $this->handler->settled);
+        $this->assertSame('EUR', Context::getContext()->currency->iso_code);
+    }
+
+    public function test_completion_with_an_unknown_session_currency_is_rejected_and_released(): void
+    {
+        $this->sessions->rows[self::SESSION_ID]['currency'] = 'XYZ';
+
+        $response = $this->complete();
+
+        $this->assertSame(422, $response->status, (string) json_encode($response->body));
+        $this->assertSame('invalid_currency', $response->body['messages'][0]['code']);
+        $this->assertSame('incomplete', $this->row()['status']);
+        $this->assertSame([], $this->handler->settled);
+    }
+
+    private function createUnderRequestCurrency(Currency $currency): Response
+    {
+        Product::$prices = [101 => ['EUR' => 18.00, 'KWD' => 6.00]];
+        Context::getContext()->currency = $currency;
+        $registry = new PaymentRegistry();
+        $registry->register($this->handler);
+        $service = new CheckoutService(Context::getContext(), $registry, FdTestGoldenRenderer::ENDPOINT, hash('sha256', ''), self::SECRET);
+        (new ReflectionProperty(CheckoutService::class, 'sessions'))->setValue($service, $this->sessions);
+        (new ReflectionProperty(CheckoutService::class, 'cartBuilder'))->setValue($service, new FdTestFixedCartBuilder($this->cart));
+
+        return $service->create(['line_items' => [['item' => ['id' => '101'], 'quantity' => 2]]], null);
+    }
+
+    public function test_session_create_prices_and_stores_the_requested_currency(): void
+    {
+        $response = $this->createUnderRequestCurrency(new Currency(Currency::getIdByIsoCode('KWD')));
+
+        $this->assertSame(201, $response->status, (string) json_encode($response->body));
+        $row = $this->sessions->rows[$response->body['id']];
+        $this->assertSame('KWD', $row['currency']);
+        $this->assertSame(600, json_decode($row['line_items'], true)[0]['item']['price']);
+        $this->assertSame('KWD', Context::getContext()->currency->iso_code);
+    }
+
+    public function test_session_create_with_an_unknown_request_currency_is_rejected(): void
+    {
+        $currency = new Currency();
+        $currency->iso_code = 'XYZ';
+        $rows = $this->sessions->rows;
+
+        $response = $this->createUnderRequestCurrency($currency);
+
+        $this->assertSame(422, $response->status, (string) json_encode($response->body));
+        $this->assertSame('invalid_currency', $response->body['messages'][0]['code']);
+        $this->assertSame($rows, $this->sessions->rows);
+    }
+
     private function dummySettle(?array $meta): array
     {
         $module = new PaymentModule();

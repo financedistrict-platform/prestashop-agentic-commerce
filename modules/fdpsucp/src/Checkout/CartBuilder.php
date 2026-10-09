@@ -73,12 +73,13 @@ class CartBuilder
 
     public function pinCurrency(array $session, \Context $context): int
     {
-        $idShop = (int) $context->shop->id;
+        $idShop = (int) ($session['id_shop'] ?? 0);
         $idCurrency = (int) \Currency::getIdByIsoCode((string) ($session['currency'] ?? ''), $idShop);
-        if ($idCurrency <= 0) {
+        $currency = $idCurrency > 0 ? new \Currency($idCurrency, null, $idShop) : null;
+        if (!\Validate::isLoadedObject($currency) || !$currency->active) {
             throw new \UnexpectedValueException('Checkout session currency is not available in this shop');
         }
-        $context->currency = new \Currency($idCurrency, null, $idShop);
+        $context->currency = $currency;
 
         return $idCurrency;
     }
