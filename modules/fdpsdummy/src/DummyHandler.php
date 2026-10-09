@@ -3,6 +3,7 @@
 namespace FD\PrismDummy;
 
 use FD\PrismUcp\Payment\PaymentHandlerInterface;
+use FD\PrismUcp\Ucp\Formatter;
 
 if (!defined('_PS_VERSION_')) {
     exit;
@@ -57,7 +58,7 @@ final class DummyHandler implements PaymentHandlerInterface
         // No gateway round-trip; just echo the amount we'd charge.
         return [
             'handler' => $this->id(),
-            'amount' => $input['total'] ?? 0,
+            'amount' => $input['total'] ?? null,
             'currency' => $input['currency'] ?? 'USD',
         ];
     }
@@ -86,14 +87,18 @@ final class DummyHandler implements PaymentHandlerInterface
             return ['success' => false, 'error' => 'Invalid customer'];
         }
 
-        $total = (float) $cart->getOrderTotal(true, \Cart::BOTH);
+        $paidAmount = $input['paid_amount'] ?? null;
+        if (!is_int($paidAmount)) {
+            return ['success' => false, 'error' => 'Payment amount was not verified'];
+        }
+
         $txRef = 'DUMMY-' . strtoupper(bin2hex(random_bytes(8)));
 
         try {
             $this->module->validateOrder(
                 (int) $cart->id,
                 (int) \Configuration::get('PS_OS_PAYMENT'),
-                $total,
+                Formatter::toMajor($paidAmount),
                 $this->name(),
                 null,
                 ['transaction_id' => $txRef],
@@ -116,6 +121,13 @@ final class DummyHandler implements PaymentHandlerInterface
             'transaction_reference' => $txRef,
             'network' => 'test',
         ];
+    }
+
+    public function preparedAmount(?array $checkoutMeta): ?int
+    {
+        $amount = $checkoutMeta[$this->id()]['amount'] ?? null;
+
+        return is_int($amount) ? $amount : null;
     }
 
     /**

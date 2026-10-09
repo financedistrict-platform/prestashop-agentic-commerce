@@ -5,6 +5,7 @@ namespace FD\PrismPayment\Prism;
 use FD\PrismPayment\Config\ConfigResolver;
 use FD\PrismUcp\Payment\PaymentHandlerInterface;
 use FD\PrismUcp\Payment\VersionedPaymentHandlerInterface;
+use FD\PrismUcp\Ucp\Formatter;
 use FD\PrismUcp\Ucp\RequestContext;
 
 if (!defined('_PS_VERSION_')) {
@@ -226,6 +227,11 @@ final class PrismHandler implements PaymentHandlerInterface, VersionedPaymentHan
             return ['success' => false, 'error' => 'Prism gateway is not configured'];
         }
 
+        $paidAmount = $input['paid_amount'] ?? null;
+        if (!is_int($paidAmount)) {
+            return ['success' => false, 'error' => 'Payment amount was not verified'];
+        }
+
         $authorization = $this->decodeCredential($input['credential'] ?? null);
         if ($authorization === null) {
             return ['success' => false, 'error' => 'Invalid x402 credential format'];
@@ -238,7 +244,7 @@ final class PrismHandler implements PaymentHandlerInterface, VersionedPaymentHan
         if ($summary === null) {
             return ['success' => false, 'error' => 'Could not extract payment summary from credential'];
         }
-        $accepts = PrismValidator::readStoredAccepts($input['checkout_meta'][$this->id()] ?? $input['checkout_meta'][self::LEGACY_ID] ?? null);
+        $accepts = PrismValidator::readStoredAccepts($this->storedNode($input['checkout_meta'] ?? null));
         if ($accepts === null) {
             return ['success' => false, 'error' => 'No stored payment requirements to validate against'];
         }
@@ -246,7 +252,6 @@ final class PrismHandler implements PaymentHandlerInterface, VersionedPaymentHan
         if ($check !== true) {
             return ['success' => false, 'error' => $check];
         }
-
         $result = $this->client()->settle($authorization);
         if (!$result) {
             return ['success' => false, 'error' => 'Prism settlement request failed'];
@@ -254,16 +259,30 @@ final class PrismHandler implements PaymentHandlerInterface, VersionedPaymentHan
 
         $txRef = $result['transaction'] ?? $result['transactionHash']
             ?? $result['facilitatorTransactionId'] ?? $result['txHash'] ?? '';
-        $settled = $result['success'] ?? ($txRef !== '');
-        if (!$settled) {
+        if (($result['success'] ?? null) !== true || !is_string($txRef) || $txRef === '') {
+            \PrestaShopLogger::addLog('[FD Prism] Settlement not confirmed; no order placed. Response: ' . json_encode($result), 3);
+
             return ['success' => false, 'error' => $result['error'] ?? $result['errorReason'] ?? $result['reason'] ?? 'Settlement failed'];
         }
+        if (isset($result['network']) && $result['network'] !== $summary['network']) {
+            \PrestaShopLogger::addLog('[FD Prism] Settlement network ' . json_encode($result['network']) . ' differs from the signed network ' . $summary['network'] . '; no order placed for transaction ' . $txRef, 3);
 
-        $network = (string) ($result['network']
-            ?? $authorization['paymentPayload']['accepted']['network']
-            ?? $authorization['paymentPayload']['network'] ?? '');
+            return ['success' => false, 'error' => 'Settlement network does not match the signed payment'];
+        }
 
-        return $this->placeOrder($input['cart'], (string) $txRef, $network);
+        return $this->placeOrder($input['cart'], $txRef, $summary['network'], Formatter::toMajor($paidAmount));
+    }
+
+    public function preparedAmount(?array $checkoutMeta): ?int
+    {
+        $amount = $this->storedNode($checkoutMeta)['prepared_amount'] ?? null;
+
+        return is_int($amount) ? $amount : null;
+    }
+
+    private function storedNode(?array $checkoutMeta): mixed
+    {
+        return $checkoutMeta[$this->id()] ?? $checkoutMeta[self::LEGACY_ID] ?? null;
     }
 
     /**
@@ -284,7 +303,7 @@ final class PrismHandler implements PaymentHandlerInterface, VersionedPaymentHan
     /**
      * @return array<string,mixed>
      */
-    private function placeOrder(\Cart $cart, string $txRef, string $network): array
+    private function placeOrder(\Cart $cart, string $txRef, string $network, float $paidAmount): array
     {
         if (!\Validate::isLoadedObject($cart)) {
             return ['success' => false, 'error' => 'Invalid cart'];
@@ -294,13 +313,11 @@ final class PrismHandler implements PaymentHandlerInterface, VersionedPaymentHan
             return ['success' => false, 'error' => 'Invalid customer'];
         }
 
-        $total = (float) $cart->getOrderTotal(true, \Cart::BOTH);
-
         try {
             $this->module->validateOrder(
                 (int) $cart->id,
                 (int) \Configuration::get('PS_OS_PAYMENT'),
-                $total,
+                $paidAmount,
                 $this->name(),
                 null,
                 ['transaction_id' => $txRef],

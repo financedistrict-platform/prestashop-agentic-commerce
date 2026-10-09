@@ -51,6 +51,8 @@ interface PaymentHandlerInterface
      */
     public function settlePayment(array $input): array;
 
+    public function preparedAmount(?array $checkoutMeta): ?int;
+
     /**
      * Handler config to embed in checkout-session responses.
      * Shape: [ '<handler_namespace>' => [ { id, version, config } ] ]

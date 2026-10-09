@@ -29,6 +29,7 @@ final class BackCompatOriginalAgentTest extends TestCase
 
         $session = FdTestGoldenRenderer::input('checkout-session.json');
         $session['ucp_version'] = null;
+        $session['payment_meta'] = json_encode(['xyz.fd.prism_payment' => ['prepared_amount' => 4695]]);
         $this->sessions = new FdTestMemorySessions([self::SESSION_ID => $session]);
         $this->handler = new FdTestRecordingPrismHandler();
     }
@@ -148,7 +149,7 @@ final class FdTestRecordingPrismHandler implements PaymentHandlerInterface
 {
     public array $settled = [];
 
-    public function __construct(private bool $throws = false)
+    public function __construct(private bool $throws = false, private bool $prepareThrows = false)
     {
     }
 
@@ -169,7 +170,19 @@ final class FdTestRecordingPrismHandler implements PaymentHandlerInterface
 
     public function prepareCheckoutPayment(array $input): ?array
     {
-        return null;
+        if ($this->prepareThrows) {
+            throw new RuntimeException('gateway down');
+        }
+        $this->prepared[] = $input;
+
+        return ['prepared_amount' => $input['total']];
+    }
+
+    public function preparedAmount(?array $checkoutMeta): ?int
+    {
+        $amount = $checkoutMeta[$this->id()]['prepared_amount'] ?? null;
+
+        return is_int($amount) ? $amount : null;
     }
 
     public function settlePayment(array $input): array

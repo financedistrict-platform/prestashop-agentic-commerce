@@ -3,6 +3,7 @@
 namespace FD\PrismUcp\Checkout;
 
 use FD\PrismUcp\Http\Response;
+use FD\PrismUcp\Payment\PaymentIntegrity;
 use FD\PrismUcp\Payment\PaymentRegistry;
 use FD\PrismUcp\Ucp\CapabilitySecret;
 use FD\PrismUcp\Ucp\Formatter;
@@ -367,13 +368,26 @@ final class CheckoutService
         if (!$this->sessions->claimForCompletion($uid, $this->idShop())) {
             return UcpError::response('session_in_progress', 'Session is already being completed', 409);
         }
+        $session = $this->sessions->findByUid($uid, $this->idShop()) ?? $session;
 
         try {
             $cart = $this->cartBuilder->build($session, $this->context);
+            $this->cartBuilder->selectSessionCarrier($cart, json_decode($session['fulfillment'] ?? 'null', true));
         } catch (\Throwable $e) {
             $this->sessions->update($uid, $this->idShop(), ['status' => 'incomplete']);
             \PrestaShopLogger::addLog('[FD UCP] Cart build failed: ' . $e->getMessage(), 3);
             return UcpError::response('cart_build_failed', 'Could not build the cart for this session', 422);
+        }
+
+        if (PaymentIntegrity::quoteError($session, $cart) !== null) {
+            try {
+                return $this->requote($uid, $session, $cart);
+            } catch (\Throwable $e) {
+                $this->sessions->update($uid, $this->idShop(), ['status' => 'incomplete']);
+                \PrestaShopLogger::addLog('[FD UCP] Requote failed: ' . $e->getMessage(), 3);
+
+                return UcpError::response('requote_failed', 'Could not re-quote this checkout session', 422);
+            }
         }
 
         try {
@@ -468,22 +482,44 @@ final class CheckoutService
         $fulfillment = null;
         $shipping = 0;
         if (is_array($dest) && !empty($dest['address_country']) && (int) $cart->id_address_delivery > 0) {
-            $selected = Fulfillment::selectedCarrierId($inputFulfillment);
-            if ($selected !== null && ctype_digit($selected)) {
-                $this->cartBuilder->selectCarrier($cart, (int) $selected);
-            }
+            $selected = $this->cartBuilder->selectSessionCarrier($cart, $inputFulfillment);
             $shipping = $this->cartBuilder->totals($cart)['shipping'];
             $lineItemIds = array_column($formatted, 'id');
             $fulfillment = Fulfillment::fromCart($cart, $dest, $lineItemIds, $selected);
         }
 
+        return [self::totalsList($subtotal, $shipping, $subtotal + $shipping), $fulfillment];
+    }
+
+    private static function totalsList(int $subtotal, int $shipping, int $total): array
+    {
         $totals = [['type' => 'subtotal', 'amount' => $subtotal]];
         if ($shipping > 0) {
             $totals[] = ['type' => 'fulfillment', 'amount' => $shipping];
         }
-        $totals[] = ['type' => 'total', 'amount' => $subtotal + $shipping];
+        $totals[] = ['type' => 'total', 'amount' => $total];
 
-        return [$totals, $fulfillment];
+        return $totals;
+    }
+
+    private function requote(string $uid, array $session, \Cart $cart): Response
+    {
+        $amounts = $this->cartBuilder->totals($cart);
+        $totals = self::totalsList($amounts['subtotal'], $amounts['shipping'], $amounts['total']);
+        $this->sessions->update($uid, $this->idShop(), [
+            'status' => 'incomplete',
+            'totals' => json_encode($totals),
+            'payment_meta' => json_encode($this->registry->prepareAll(
+                $this->prepareInput($uid, $totals, (string) $session['currency'])
+            )),
+            'updated_at' => date('Y-m-d H:i:s'),
+        ]);
+
+        return UcpError::response(
+            'quote_changed',
+            'The order total no longer matches the quote. The session was re-quoted; fetch it and pay the new amount.',
+            409
+        );
     }
 
     /**

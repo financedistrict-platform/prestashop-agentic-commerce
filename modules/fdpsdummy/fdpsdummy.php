@@ -52,6 +52,11 @@ class FdPsDummy extends PaymentModule
         if (empty($params['registry'])) {
             return;
         }
+        if (!method_exists(\FD\PrismUcp\Payment\PaymentHandlerInterface::class, 'preparedAmount')) {
+            \PrestaShopLogger::addLog('[FD Dummy] A newer Finance District UCP module is required; Dummy handler not registered', 3);
+
+            return;
+        }
         require_once __DIR__ . '/src/DummyHandler.php';
         $params['registry']->register(new \FD\PrismDummy\DummyHandler($this));
     }

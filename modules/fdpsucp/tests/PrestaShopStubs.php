@@ -104,6 +104,27 @@ function bqSQL($value): string
 
 class PaymentModule extends Module
 {
+    public $currentOrder = 0;
+    public array $validated = [];
+
+    public function validateOrder(...$args)
+    {
+        $this->validated[] = $args;
+        $this->currentOrder = 1001;
+
+        return true;
+    }
+}
+
+class Customer
+{
+    public $id;
+    public $secure_key = 'secure';
+
+    public function __construct($id = null)
+    {
+        $this->id = $id;
+    }
 }
 
 class Order
@@ -134,6 +155,8 @@ class Language
 
 class Context
 {
+    public static ?Context $instance = null;
+
     public $currency;
     public $shop;
     public $language;
@@ -143,6 +166,11 @@ class Context
         $this->currency = new Currency();
         $this->shop = new Shop();
         $this->language = new Language();
+    }
+
+    public static function getContext(): self
+    {
+        return self::$instance ??= new self();
     }
 }
 
@@ -182,6 +210,42 @@ class Validate
 
 class Cart
 {
+    public const ONLY_PRODUCTS = 1;
+    public const BOTH = 3;
+    public const ONLY_SHIPPING = 5;
+
+    public $id = 77;
+    public $id_customer = 5;
+    public $id_currency = 1;
+    public $id_address_delivery = 0;
+    public array $orderTotals = [self::ONLY_PRODUCTS => 42.00, self::ONLY_SHIPPING => 4.95, self::BOTH => 46.95];
+
+    public ?array $deliveryOption = null;
+    public array $carrierTotals = [];
+
+    public function getDeliveryOptionList()
+    {
+        return [];
+    }
+
+    public function getOrderTotal($withTaxes = true, $type = self::BOTH)
+    {
+        $carrier = $this->deliveryOption === null ? null : (int) reset($this->deliveryOption);
+
+        return ($this->carrierTotals[$carrier] ?? $this->orderTotals)[$type] ?? 0.0;
+    }
+
+    public function setDeliveryOption($deliveryOption = null)
+    {
+        $this->deliveryOption = $deliveryOption;
+
+        return true;
+    }
+
+    public function update($nullValues = false)
+    {
+        return true;
+    }
 }
 
 final class FdTestStubs
@@ -193,6 +257,7 @@ final class FdTestStubs
         Module::$hooks = [];
         Db::$statements = [];
         Product::$prices = [];
+        Context::$instance = null;
         PrestaShopLogger::$logs = [];
         \FD\PrismUcp\Ucp\RequestContext::set(null);
         \FD\PrismUcp\Ucp\AgentProfileFetcher::resetCache();
