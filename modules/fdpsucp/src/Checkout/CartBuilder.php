@@ -119,6 +119,47 @@ class CartBuilder
         ];
     }
 
+    public function priceLines(\Cart $cart, array $formatted): ?array
+    {
+        $inCart = [];
+        foreach ($cart->getProducts() ?: [] as $row) {
+            $inCart[(int) $row['id_product'] . '-' . (int) $row['id_product_attribute']] = $row;
+        }
+
+        $wanted = [];
+        foreach ($formatted as $li) {
+            $key = $this->lineKey($li);
+            $wanted[$key] = ($wanted[$key] ?? 0) + (int) $li['quantity'];
+        }
+        if (count($wanted) !== count($inCart)) {
+            return null;
+        }
+        foreach ($wanted as $key => $quantity) {
+            if (!isset($inCart[$key]['price_wt']) || (int) ($inCart[$key]['cart_quantity'] ?? 0) !== $quantity) {
+                return null;
+            }
+        }
+
+        $priced = [];
+        foreach ($formatted as $li) {
+            $price = $this->toMinor((float) $inCart[$this->lineKey($li)]['price_wt']);
+            $lineTotal = $price * (int) $li['quantity'];
+            $li['item']['price'] = $price;
+            $li['totals'] = [
+                ['type' => 'subtotal', 'amount' => $lineTotal],
+                ['type' => 'total', 'amount' => $lineTotal],
+            ];
+            $priced[] = $li;
+        }
+
+        return $priced;
+    }
+
+    private function lineKey(array $lineItem): string
+    {
+        return (int) ($lineItem['item']['id'] ?? 0) . '-' . (int) ($lineItem['item']['variant_id'] ?? 0);
+    }
+
     /**
      * @param array<string,mixed> $buyer
      */

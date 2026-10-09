@@ -132,7 +132,11 @@ final class CheckoutService
             'fulfillment' => $inputFulfillment,
         ];
 
-        [$totals, $fulfillment] = $this->priceAndFulfill($provisional, $formatted, $inputFulfillment);
+        $priced = $this->priceAndFulfill($provisional, $formatted, $inputFulfillment);
+        if ($priced === null) {
+            return self::cartMismatch();
+        }
+        [$totals, $fulfillment, $formatted] = $priced;
 
         $uid = self::uuid();
         $paymentMeta = $this->registry->prepareAll($this->prepareInput($uid, $totals, $currency));
@@ -266,7 +270,11 @@ final class CheckoutService
             'buyer' => $buyer,
             'fulfillment' => $fulfillmentInput,
         ];
-        [$totals, $fulfillment] = $this->priceAndFulfill($provisional, $formatted, $fulfillmentInput);
+        $priced = $this->priceAndFulfill($provisional, $formatted, $fulfillmentInput);
+        if ($priced === null) {
+            return self::cartMismatch();
+        }
+        [$totals, $fulfillment, $formatted] = $priced;
 
         $updates = [
             'line_items' => json_encode($formatted),
@@ -397,9 +405,15 @@ final class CheckoutService
             return UcpError::response('cart_build_failed', 'Could not build the cart for this session', 422);
         }
 
+        $lines = $this->cartBuilder->priceLines($cart, json_decode($session['line_items'] ?? '[]', true) ?: []);
+        if ($lines === null) {
+            $this->sessions->update($uid, $this->idShop(), ['status' => 'incomplete']);
+            return self::cartMismatch();
+        }
+
         if (PaymentIntegrity::quoteError($session, $cart) !== null) {
             try {
-                return $this->requote($uid, $session, $cart);
+                return $this->requote($uid, $session, $cart, $lines);
             } catch (\Throwable $e) {
                 $this->sessions->update($uid, $this->idShop(), ['status' => 'incomplete']);
                 \PrestaShopLogger::addLog('[FD UCP] Requote failed: ' . $e->getMessage(), 3);
@@ -482,31 +496,39 @@ final class CheckoutService
      * @param array<string,mixed> $provisional
      * @param array<int,array<string,mixed>> $formatted
      * @param array<string,mixed>|null $inputFulfillment
-     * @return array{0:array<int,array<string,mixed>>,1:array<string,mixed>|null}
+     * @return array{0:array<int,array<string,mixed>>,1:array<string,mixed>|null,2:array<int,array<string,mixed>>}|null
      */
-    private function priceAndFulfill(array $provisional, array $formatted, ?array $inputFulfillment): array
+    private function priceAndFulfill(array $provisional, array $formatted, ?array $inputFulfillment): ?array
     {
         $cart = $this->cartBuilder->build($provisional, $this->context);
 
-        // Subtotal is the sum of the line items (catalog prices), so it always
-        // matches what the agent sees per item. The Cart is used only to price
-        // shipping (and later to create the order).
-        $subtotal = 0;
-        foreach ($formatted as $li) {
-            $subtotal += $this->totalOf($li['totals'] ?? []);
-        }
-
         $dest = $inputFulfillment['methods'][0]['destinations'][0] ?? null;
-        $fulfillment = null;
-        $shipping = 0;
-        if (is_array($dest) && !empty($dest['address_country']) && (int) $cart->id_address_delivery > 0) {
-            $selected = $this->cartBuilder->selectSessionCarrier($cart, $inputFulfillment);
-            $shipping = $this->cartBuilder->totals($cart)['shipping'];
-            $lineItemIds = array_column($formatted, 'id');
-            $fulfillment = Fulfillment::fromCart($cart, $dest, $lineItemIds, $selected);
+        if (!is_array($dest) || empty($dest['address_country']) || (int) $cart->id_address_delivery <= 0) {
+            $subtotal = array_sum(array_map(fn (array $li): int => $this->totalOf($li['totals'] ?? []), $formatted));
+
+            return [self::totalsList($subtotal, 0, $subtotal), null, $formatted];
         }
 
-        return [self::totalsList($subtotal, $shipping, $subtotal + $shipping), $fulfillment];
+        $selected = $this->cartBuilder->selectSessionCarrier($cart, $inputFulfillment);
+        $priced = $this->cartBuilder->priceLines($cart, $formatted);
+        if ($priced === null) {
+            return null;
+        }
+        $fulfillment = Fulfillment::fromCart($cart, $dest, array_column($priced, 'id'), $selected);
+
+        return [$this->cartTotals($cart), $fulfillment, $priced];
+    }
+
+    private function cartTotals(\Cart $cart): array
+    {
+        $amounts = $this->cartBuilder->totals($cart);
+
+        return self::totalsList($amounts['subtotal'], $amounts['shipping'], $amounts['total']);
+    }
+
+    private static function cartMismatch(): Response
+    {
+        return UcpError::response('cart_mismatch', 'The delivery cart does not match the requested line items', 422);
     }
 
     private static function totalsList(int $subtotal, int $shipping, int $total): array
@@ -520,12 +542,12 @@ final class CheckoutService
         return $totals;
     }
 
-    private function requote(string $uid, array $session, \Cart $cart): Response
+    private function requote(string $uid, array $session, \Cart $cart, array $lines): Response
     {
-        $amounts = $this->cartBuilder->totals($cart);
-        $totals = self::totalsList($amounts['subtotal'], $amounts['shipping'], $amounts['total']);
+        $totals = $this->cartTotals($cart);
         $this->sessions->update($uid, $this->idShop(), [
             'status' => 'incomplete',
+            'line_items' => json_encode($lines),
             'totals' => json_encode($totals),
             'payment_meta' => json_encode($this->registry->prepareAll(
                 $this->prepareInput($uid, $totals, (string) $session['currency'])
