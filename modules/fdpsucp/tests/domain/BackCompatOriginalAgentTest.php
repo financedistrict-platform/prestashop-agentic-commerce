@@ -234,15 +234,9 @@ final class FdTestMemorySessions extends SessionRepository
         return $this->rows[$uid] ?? null;
     }
 
-    public function findByIdempotencyKey(string $key, int $idShop): ?array
+    public function findByIdempotencyKey(string $key, int $idShop): array
     {
-        foreach ($this->rows as $row) {
-            if (($row['idempotency_key'] ?? null) === $key) {
-                return $row;
-            }
-        }
-
-        return null;
+        return $key === '' ? [] : array_values(array_filter($this->rows, static fn (array $row): bool => ($row['idempotency_key'] ?? null) === $key));
     }
 
     public function update(string $uid, int $idShop, array $data): bool

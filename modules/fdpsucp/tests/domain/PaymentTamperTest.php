@@ -50,11 +50,11 @@ final class PaymentTamperTest extends TestCase
         $this->sessions->rows[self::SESSION_ID]['payment_meta'] = json_encode(['xyz.fd.prism_payment' => ['prepared_amount' => $prepared ?? $total]]);
     }
 
-    private function service(): CheckoutService
+    private function service(string $secret = self::SECRET): CheckoutService
     {
         $registry = new PaymentRegistry();
         $registry->register($this->handler);
-        $service = new CheckoutService(Context::getContext(), $registry, FdTestGoldenRenderer::ENDPOINT, hash('sha256', ''), self::SECRET);
+        $service = new CheckoutService(Context::getContext(), $registry, FdTestGoldenRenderer::ENDPOINT, hash('sha256', ''), $secret);
         (new ReflectionProperty(CheckoutService::class, 'sessions'))->setValue($service, $this->sessions);
         (new ReflectionProperty(CheckoutService::class, 'cartBuilder'))->setValue($service, new FdTestFixedCartBuilder($this->cart));
 
@@ -750,6 +750,169 @@ final class PaymentTamperTest extends TestCase
         $this->assertSame(5, (new CartBuilder())->deliveryStateId('California', 21));
         $this->assertSame(5, (new CartBuilder())->deliveryStateId('CA', 21));
         $this->assertSame(60, (new CartBuilder())->deliveryStateId('Stockholm', 18));
+    }
+
+    private const OTHER_SESSION_ID = '0a9c5e21-7d34-4f58-b1a6-93c8d2e47f10';
+    private const KEY = 'idem-key-1';
+
+    private function claimKey(string $status = 'incomplete', ?string $secretHash = null): void
+    {
+        $row = &$this->sessions->rows[self::SESSION_ID];
+        $row['idempotency_key'] = self::KEY;
+        $row['status'] = $status;
+        $row['id_order'] = $status === 'completed' ? 1001 : null;
+        if ($secretHash !== null) {
+            $row['session_secret_hash'] = $secretHash;
+        }
+    }
+
+    private function createWithKey(string $secret, ?string $key = self::KEY): Response
+    {
+        Product::$prices = [101 => ['EUR' => 18.00]];
+        Context::getContext()->currency = new Currency(Currency::getIdByIsoCode('EUR'));
+
+        return $this->service($secret)->create(['line_items' => [['item' => ['id' => '101'], 'quantity' => 2]]], $key);
+    }
+
+    private function assertSessionUntouched(string $secretHash): void
+    {
+        $this->assertSame($secretHash, $this->sessions->rows[self::SESSION_ID]['session_secret_hash']);
+    }
+
+    public static function claimedSessionStatuses(): array
+    {
+        return ['open session' => ['incomplete'], 'completed session' => ['completed']];
+    }
+
+    #[\PHPUnit\Framework\Attributes\DataProvider('claimedSessionStatuses')]
+    public function test_create_replay_without_the_session_secret_does_not_return_or_rotate_the_session(string $status): void
+    {
+        $this->claimKey($status);
+        $original = $this->row()['session_secret_hash'];
+
+        $response = $this->createWithKey('');
+
+        $this->assertSame(201, $response->status, (string) json_encode($response->body));
+        $this->assertNotSame(self::SESSION_ID, $response->body['id']);
+        $this->assertSessionUntouched($original);
+    }
+
+    #[\PHPUnit\Framework\Attributes\DataProvider('claimedSessionStatuses')]
+    public function test_create_replay_with_another_session_secret_does_not_return_or_rotate_the_session(string $status): void
+    {
+        $this->claimKey($status);
+        $original = $this->row()['session_secret_hash'];
+
+        $response = $this->createWithKey('someone-elses-secret');
+
+        $this->assertSame(201, $response->status, (string) json_encode($response->body));
+        $this->assertNotSame(self::SESSION_ID, $response->body['id']);
+        $this->assertSessionUntouched($original);
+    }
+
+    public function test_create_replay_by_the_secret_holder_returns_the_session_without_minting_a_secret(): void
+    {
+        $this->claimKey();
+        $original = $this->row()['session_secret_hash'];
+
+        $response = $this->createWithKey(self::SECRET);
+
+        $this->assertSame(200, $response->status, (string) json_encode($response->body));
+        $this->assertSame(self::SESSION_ID, $response->body['id']);
+        $this->assertArrayNotHasKey('session_secret', $response->body);
+        $this->assertSessionUntouched($original);
+    }
+
+    public function test_create_replay_never_matches_a_session_without_a_stored_secret(): void
+    {
+        $this->claimKey('incomplete', '');
+
+        $response = $this->createWithKey('');
+
+        $this->assertSame(201, $response->status, (string) json_encode($response->body));
+        $this->assertNotSame(self::SESSION_ID, $response->body['id']);
+        $this->assertSame('', $this->sessions->rows[self::SESSION_ID]['session_secret_hash']);
+    }
+
+    public function test_create_without_a_key_always_mints_a_fresh_session(): void
+    {
+        $this->claimKey();
+
+        $response = $this->createWithKey(self::SECRET, null);
+
+        $this->assertSame(201, $response->status, (string) json_encode($response->body));
+        $this->assertNotSame(self::SESSION_ID, $response->body['id']);
+        $this->assertArrayHasKey('session_secret', $response->body);
+    }
+
+    private function completeWithKey(string $sessionId, string $secret = self::SECRET): Response
+    {
+        return $this->service($secret)->complete($sessionId, ['payment' => ['instruments' => [self::INSTRUMENT]]], self::KEY);
+    }
+
+    private function addCompletedSession(string $secretHash): void
+    {
+        $row = $this->row();
+        $row['session_uid'] = self::OTHER_SESSION_ID;
+        $row['status'] = 'completed';
+        $row['id_order'] = 2002;
+        $row['idempotency_key'] = self::KEY;
+        $row['session_secret_hash'] = $secretHash;
+        $this->sessions->rows[self::OTHER_SESSION_ID] = $row;
+    }
+
+    public function test_create_replay_picks_the_callers_own_session_among_sessions_sharing_the_key(): void
+    {
+        $this->addCompletedSession(hash('sha256', 'someone-elses-secret'));
+        $this->claimKey();
+
+        $response = $this->createWithKey(self::SECRET);
+
+        $this->assertSame(200, $response->status, (string) json_encode($response->body));
+        $this->assertSame(self::SESSION_ID, $response->body['id']);
+        $this->assertArrayNotHasKey('session_secret', $response->body);
+    }
+
+    public function test_complete_replay_by_the_secret_holder_returns_the_same_order(): void
+    {
+        $this->claimKey('completed');
+
+        $response = $this->completeWithKey(self::SESSION_ID);
+
+        $this->assertSame(200, $response->status, (string) json_encode($response->body));
+        $this->assertSame([], $this->handler->settled);
+    }
+
+    public function test_complete_replay_guard_never_returns_the_order_of_a_different_session(): void
+    {
+        $this->addCompletedSession(hash('sha256', self::SECRET));
+
+        $response = $this->completeWithKey(self::SESSION_ID);
+
+        $this->assertSame(409, $response->status, (string) json_encode($response->body));
+        $this->assertSame('incomplete', $this->row()['status']);
+        $this->assertSame([], $this->handler->settled);
+    }
+
+    public function test_complete_with_a_key_claimed_by_another_secret_holder_settles_only_its_own_session(): void
+    {
+        $this->addCompletedSession(hash('sha256', 'someone-elses-secret'));
+
+        $response = $this->completeWithKey(self::SESSION_ID);
+
+        $this->assertSame(200, $response->status, (string) json_encode($response->body));
+        $this->assertCount(1, $this->handler->settled);
+        $this->assertSame(2002, (int) $this->sessions->rows[self::OTHER_SESSION_ID]['id_order']);
+    }
+
+    public function test_complete_replay_never_matches_a_session_without_a_stored_secret(): void
+    {
+        $this->claimKey('completed', '');
+
+        $response = $this->completeWithKey(self::SESSION_ID, '');
+
+        $this->assertNotSame(200, $response->status);
+        $this->assertSame([], $this->handler->settled);
     }
 
     private function dummySettle(?array $meta): array

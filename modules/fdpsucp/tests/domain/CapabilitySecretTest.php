@@ -41,6 +41,17 @@ final class CapabilitySecretTest extends TestCase
         $this->assertTrue(CapabilitySecret::authorizes($stored, self::SECRET));
     }
 
+    public function test_holds_requires_a_stored_hash_and_the_matching_secret(): void
+    {
+        $stored = $this->hashOf(self::SECRET);
+
+        $this->assertTrue(CapabilitySecret::holds($stored, self::SECRET));
+        $this->assertFalse(CapabilitySecret::holds($stored, ''));
+        $this->assertFalse(CapabilitySecret::holds($stored, 'nope'));
+        $this->assertFalse(CapabilitySecret::holds('', ''));
+        $this->assertFalse(CapabilitySecret::holds('', self::SECRET));
+    }
+
     public function test_authorizes_is_false_for_missing_and_wrong(): void
     {
         $stored = $this->hashOf(self::SECRET);
