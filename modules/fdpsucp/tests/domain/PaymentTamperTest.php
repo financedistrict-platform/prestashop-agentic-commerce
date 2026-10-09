@@ -2,6 +2,7 @@
 
 declare(strict_types=1);
 
+use FD\PrismDummy\DummyGate;
 use FD\PrismDummy\DummyHandler;
 use FD\PrismUcp\Checkout\CartBuilder;
 use FD\PrismUcp\Checkout\CheckoutService;
@@ -756,7 +757,7 @@ final class PaymentTamperTest extends TestCase
         $this->cart->deliveryOption = [9 => '7,'];
         $module = new PaymentModule();
         $registry = new PaymentRegistry();
-        $registry->register(new DummyHandler($module));
+        $registry->register(new DummyHandler($module, new DummyGate(true, true, false)));
         $result = $registry->settle('dummy', [
             'session' => $this->row(),
             'cart' => $this->cart,

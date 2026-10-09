@@ -58,6 +58,9 @@ class FdPsDummy extends PaymentModule
             return;
         }
         require_once __DIR__ . '/src/DummyHandler.php';
+        if (!\FD\PrismDummy\DummyGate::fromEnvironment()->isOpen()) {
+            return;
+        }
         $params['registry']->register(new \FD\PrismDummy\DummyHandler($this));
     }
 }

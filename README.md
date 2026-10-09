@@ -105,6 +105,8 @@ php bin/console prestashop:module install fdpsprism
 php bin/console prestashop:module install fdpsdummy
 ```
 
+The **fdpsdummy** handler places paid orders without taking any payment, so it stays closed unless all three hold: `define('FDPSDUMMY_ENABLED', true);` in `config/defines_custom.inc.php`, the shop runs in developer mode (`_PS_MODE_DEV_`), and no Prism API key is configured. While closed it is not registered, not listed in `/.well-known/ucp`, and refuses to settle.
+
 Install **fdpsucp** first, then the payment handlers — they register with the core via the `actionUcpCollectPaymentHandlers` hook. Run `bin/console` as the web-server user (e.g. `www-data`), not root, or the cache write will break the Back Office.
 
 #### Web-server rewrites
