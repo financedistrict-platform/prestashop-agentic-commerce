@@ -6,174 +6,212 @@ if (!defined('_PS_VERSION_')) {
     exit;
 }
 
-/**
- * Binding guard (NFR-1). Ported from FD_Prism_Validator. Confirms the agent's
- * signed x402 credential matches the payment requirements we quoted — same
- * network/asset/recipient and an amount that is not short — before we ask Prism
- * to settle. Returns true on success or a human-readable error string.
- */
 final class PrismValidator
 {
-    /**
-     * @param array<string,mixed> $summary {network, asset, value, to}
-     * @param array<int,array<string,mixed>> $accepts stored accepts[] from the quote
-     * @return true|string
-     */
-    public static function validate(array $summary, array $accepts)
+    public const X402_VERSION = 2;
+
+    private const SCHEME = 'exact';
+
+    private const START_LEEWAY = 30;
+
+    private const AUTHORIZATION_FIELDS = ['from', 'to', 'value', 'validAfter', 'validBefore', 'nonce'];
+
+    public static function parseQuote(mixed $config): ?array
     {
-        // Fail closed on an incomplete credential: the signed summary MUST carry
-        // every field we guard on, independent of which accept it matches. These
-        // are checked up front so the per-accept loop below can `continue` past a
-        // non-matching accept (e.g. a different asset) without ever waving through
-        // a credential that simply omitted a field (money-movement guard, NFR-1).
-        if (empty($summary['asset'])) {
-            return 'Signed payment asset is missing';
+        if (!is_array($config) || ($config['x402Version'] ?? null) !== self::X402_VERSION) {
+            return null;
         }
-        if (empty($summary['to'])) {
-            return 'Signed payment recipient is missing';
+        $resource = $config['resource'] ?? null;
+        if (!is_array($resource) || self::text($resource['url'] ?? null) === null) {
+            return null;
         }
-        $signedAmount = (string) ($summary['value'] ?? '');
-        if (!self::isNonNegativeInteger($signedAmount)) {
-            return 'Signed payment amount is missing or not a valid integer';
+        $accepts = $config['accepts'] ?? null;
+        if (!is_array($accepts) || !array_is_list($accepts)) {
+            return null;
         }
-
-        foreach ($accepts as $accept) {
-            // Network must match this accept.
-            if (($accept['network'] ?? null) !== ($summary['network'] ?? null)) {
-                continue;
-            }
-
-            // Asset must match — but a mismatch just means THIS accept is not the
-            // one; try the next. This is essential for multi-asset networks: e.g.
-            // if EURC is listed before USDC on the same network, a USDC payment
-            // must still match the USDC accept rather than be rejected at EURC.
-            if (empty($accept['asset'])
-                || strcasecmp((string) $accept['asset'], (string) $summary['asset']) !== 0
-            ) {
-                continue;
-            }
-
-            // The accept now matches network + asset. Recipient and amount MUST
-            // hold — a mismatch here signals tampering, not a different accept.
-            if (empty($accept['payTo'])
-                || strcasecmp((string) $accept['payTo'], (string) $summary['to']) !== 0
-            ) {
-                return 'Signed payment recipient does not match the expected payTo address';
-            }
-
-            $storedAmount = (string) ($accept['amount'] ?? '');
-            if (!self::isNonNegativeInteger($storedAmount)) {
-                return 'Stored payment requirement has an invalid amount';
-            }
-            if (self::compareBigInt($signedAmount, $storedAmount) < 0) {
-                return "Signed amount ($signedAmount) is less than required ($storedAmount)";
-            }
-
-            return true;
-        }
-
-        return 'No stored payment requirement matches network=' . ($summary['network'] ?? '');
-    }
-
-    /**
-     * Extract {network, asset, value, to} from an x402 credential. Handles
-     * base64 string, nested paymentPayload, and flat-object wire formats.
-     *
-     * @param mixed $credential
-     * @return array<string,string>|null
-     */
-    public static function extractSignedSummary($credential): ?array
-    {
-        $decoded = self::decodeToArray($credential);
-        if ($decoded === null) {
+        $usable = array_values(array_filter($accepts, self::isSettleable(...)));
+        if ($usable === []) {
             return null;
         }
 
-        // Format: { paymentPayload: { network, payload: { authorization: { to, value } } } }
-        $payload = $decoded['paymentPayload'] ?? null;
-        if (is_array($payload)) {
-            $auth = $payload['payload']['authorization'] ?? null;
-            if (is_array($auth)) {
-                $accepted = $payload['accepted'] ?? [];
-
-                return [
-                    'network' => (string) ($payload['network'] ?? $accepted['network'] ?? ''),
-                    'asset' => (string) ($decoded['paymentRequirements']['asset']
-                        ?? $accepted['asset'] ?? $payload['payload']['asset'] ?? ''),
-                    'value' => (string) ($auth['value'] ?? '0'),
-                    'to' => (string) ($auth['to'] ?? ''),
-                ];
-            }
-        }
-
-        // Format: flat { network, asset, value, to }
-        if (isset($decoded['network'], $decoded['value'])) {
-            return [
-                'network' => (string) $decoded['network'],
-                'asset' => (string) ($decoded['asset'] ?? ''),
-                'value' => (string) $decoded['value'],
-                'to' => (string) ($decoded['to'] ?? ''),
-            ];
-        }
-
-        return null;
+        return array_replace($config, ['accepts' => $usable]);
     }
 
-    /**
-     * Pull the stored accepts[] entries out of this handler's payment-meta node
-     * (the `ucp` block returned by Prism's prepare).
-     *
-     * @param array<string,mixed>|null $meta the handler's own payment_meta node
-     * @return array<int,array<string,mixed>>|null
-     */
-    public static function readStoredAccepts(?array $meta): ?array
+    public static function decode(mixed $credential): ?array
     {
-        $ucp = $meta['ucp'] ?? null;
-        if (!is_array($ucp)) {
+        $decoded = self::decodeValue($credential);
+        if ($decoded === null || !isset($decoded['authorization'])) {
+            return $decoded;
+        }
+        if (isset($decoded['paymentPayload'])) {
             return null;
         }
-        foreach ($ucp as $entries) {
-            if (!is_array($entries)) {
-                continue;
-            }
-            foreach ($entries as $entry) {
-                if (isset($entry['config']['accepts']) && is_array($entry['config']['accepts'])) {
-                    return $entry['config']['accepts'];
-                }
-            }
-        }
 
-        return null;
+        return self::decodeValue($decoded['authorization']);
     }
 
-    /** A base-10 integer string with no sign, decimal point, or exponent. */
-    private static function isNonNegativeInteger(string $value): bool
+    public static function verify(array $credential, array $quote): VerifiedPayment|string
     {
-        return $value !== '' && ctype_digit($value);
-    }
-
-    /** BigInt-safe compare: -1 / 0 / 1. Uses bcmath/gmp when available. */
-    private static function compareBigInt(string $a, string $b): int
-    {
-        if (function_exists('bccomp')) {
-            return bccomp($a, $b, 0);
+        $payload = $credential['paymentPayload'] ?? $credential;
+        if (!is_array($payload)) {
+            return 'Payment payload is missing';
         }
-        if (function_exists('gmp_cmp')) {
-            return (int) gmp_cmp($a, $b);
+        foreach ([$credential['x402Version'] ?? null, $payload['x402Version'] ?? null] as $version) {
+            if ($version !== null && $version !== $quote['x402Version']) {
+                return 'Payment protocol version does not match the stored payment requirements';
+            }
         }
-        $len = max(strlen($a), strlen($b));
 
-        return strcmp(
-            str_pad($a, $len, '0', STR_PAD_LEFT),
-            str_pad($b, $len, '0', STR_PAD_LEFT)
+        $accepted = $payload['accepted'] ?? null;
+        if (!is_array($accepted)) {
+            return 'Signed payment does not state which requirement it accepts';
+        }
+        $requirement = self::matchRequirement($accepted, $quote['accepts']);
+        if ($requirement === null) {
+            return 'Signed payment does not match any stored payment requirement';
+        }
+        if (isset($payload['network']) && $payload['network'] !== $requirement['network']) {
+            return 'Signed payment network does not match the accepted requirement';
+        }
+        if (array_key_exists('paymentRequirements', $credential)
+            && !(is_array($credential['paymentRequirements']) && self::sameRequirement($credential['paymentRequirements'], $requirement))
+        ) {
+            return 'Forwarded payment requirements do not match the stored payment requirement';
+        }
+        if (array_key_exists('resource', $payload)
+            && !(is_array($payload['resource']) && ($payload['resource']['url'] ?? null) === $quote['resource']['url'])
+        ) {
+            return 'Signed payment names another resource';
+        }
+
+        $signed = $payload['payload'] ?? null;
+        $signature = is_array($signed) ? ($signed['signature'] ?? null) : null;
+        $authorization = is_array($signed) ? ($signed['authorization'] ?? null) : null;
+        if (!is_string($signature) || preg_match('/^0x[0-9a-fA-F]+$/', $signature) !== 1) {
+            return 'Payment signature is missing';
+        }
+        if (!is_array($authorization)) {
+            return 'Payment authorization is missing';
+        }
+        $error = self::authorizationError($authorization, $requirement);
+        if ($error !== null) {
+            return $error;
+        }
+
+        return new VerifiedPayment(
+            $quote['x402Version'],
+            $requirement,
+            [
+                'x402Version' => $quote['x402Version'],
+                'resource' => $quote['resource'],
+                'accepted' => $requirement,
+                'payload' => [
+                    'signature' => $signature,
+                    'authorization' => self::signedFields($authorization),
+                ],
+            ],
+            $requirement['network'],
         );
     }
 
-    /**
-     * @param mixed $input
-     * @return array<string,mixed>|null
-     */
-    private static function decodeToArray($input): ?array
+    private static function authorizationError(array $authorization, array $requirement): ?string
+    {
+        foreach (self::AUTHORIZATION_FIELDS as $field) {
+            if (!array_key_exists($field, $authorization)) {
+                return "Payment authorization $field is missing";
+            }
+            if (self::text($authorization[$field]) === null) {
+                return "Payment authorization $field must be a non-empty string";
+            }
+        }
+        if (preg_match('/^0x[0-9a-fA-F]{40}$/', $authorization['from']) !== 1) {
+            return 'Payment authorization from is not an address';
+        }
+        if (strcasecmp($authorization['to'], $requirement['payTo']) !== 0) {
+            return 'Signed payment recipient does not match the expected payTo address';
+        }
+        foreach (['value', 'validAfter', 'validBefore'] as $field) {
+            if (!ctype_digit($authorization[$field])) {
+                return "Payment authorization $field must be a decimal string";
+            }
+        }
+        if ($authorization['value'] !== $requirement['amount']) {
+            return 'Signed amount does not equal the required amount';
+        }
+        if (preg_match('/^0x[0-9a-fA-F]{64}$/', $authorization['nonce']) !== 1) {
+            return 'Payment authorization nonce is malformed';
+        }
+        $now = time();
+        if ((int) $authorization['validAfter'] > $now + self::START_LEEWAY) {
+            return 'Payment authorization is not valid yet';
+        }
+        if ((int) $authorization['validBefore'] <= $now) {
+            return 'Payment authorization has expired';
+        }
+
+        return null;
+    }
+
+    private static function signedFields(array $authorization): array
+    {
+        $fields = [];
+        foreach (self::AUTHORIZATION_FIELDS as $field) {
+            $fields[$field] = $authorization[$field];
+        }
+
+        return $fields;
+    }
+
+    private static function matchRequirement(array $accepted, array $requirements): ?array
+    {
+        foreach ($requirements as $requirement) {
+            if (self::sameRequirement($accepted, $requirement)) {
+                return $requirement;
+            }
+        }
+
+        return null;
+    }
+
+    private static function sameRequirement(array $candidate, array $requirement): bool
+    {
+        foreach (['scheme', 'network', 'amount'] as $field) {
+            if (($candidate[$field] ?? null) !== $requirement[$field]) {
+                return false;
+            }
+        }
+        foreach (['asset', 'payTo'] as $field) {
+            $value = $candidate[$field] ?? null;
+            if (!is_string($value) || strcasecmp($value, $requirement[$field]) !== 0) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private static function isSettleable(mixed $accept): bool
+    {
+        if (!is_array($accept) || ($accept['scheme'] ?? null) !== self::SCHEME) {
+            return false;
+        }
+        $network = self::text($accept['network'] ?? null);
+        $amount = self::text($accept['amount'] ?? null);
+
+        return $network !== null
+            && str_starts_with($network, 'eip155:')
+            && self::text($accept['asset'] ?? null) !== null
+            && self::text($accept['payTo'] ?? null) !== null
+            && $amount !== null
+            && ctype_digit($amount);
+    }
+
+    private static function text(mixed $value): ?string
+    {
+        return is_string($value) && $value !== '' ? $value : null;
+    }
+
+    private static function decodeValue(mixed $input): ?array
     {
         if (is_array($input)) {
             return $input;

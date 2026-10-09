@@ -36,20 +36,12 @@ class PrismClient
         ], 30);
     }
 
-    /**
-     * @param array<string,mixed> $x402Authorization
-     * @return array<string,mixed>|null
-     */
-    public function settle(array $x402Authorization): ?array
+    public function settle(int $version, array $paymentPayload, array $paymentRequirements): ?array
     {
-        $version = (int) ($x402Authorization['x402Version']
-            ?? $x402Authorization['paymentPayload']['x402Version'] ?? 2);
-        $body = [
-            'paymentPayload' => $x402Authorization['paymentPayload'] ?? $x402Authorization,
-            'paymentRequirements' => $x402Authorization['paymentRequirements'] ?? null,
-        ];
-
-        return $this->request('POST', "/api/v{$version}/payment/settle", $body, 30);
+        return $this->request('POST', "/api/v{$version}/payment/settle", [
+            'paymentPayload' => $paymentPayload,
+            'paymentRequirements' => $paymentRequirements,
+        ], 30);
     }
 
     /**

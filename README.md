@@ -175,7 +175,7 @@ A checkout session or cart remembers the version its agent declared at creation.
 
 An unknown stored value is rejected on save. If one is stored anyway, the module configuration page shows an error and every UCP route answers `500 configuration_invalid`; the shop itself keeps running.
 
-Payment instruments from 0.5.3-era agents still complete: `handler_id` `x402` or `xyz.fd.prism_payment`, instrument `type` `x402`, `tokenized`, `default` or missing, and a credential with or without `type`. The Prism quote binding and Prism settlement stay the guards.
+Payment instruments from 0.5.3-era agents still complete: `handler_id` `x402` or `xyz.fd.prism_payment`, instrument `type` `x402`, `tokenized`, `default` or missing, and a credential with or without `type`. The credential itself must be an x402 v2 `exact` payment payload (bare, wrapped in `paymentPayload`, or in an `authorization` envelope) whose signed amount equals the quoted amount; flat credentials are rejected.
 
 ### Agent authentication (closed by default)
 
@@ -366,7 +366,7 @@ modules/
 
 - **Own session table** — checkout state lives in a dedicated `ps_prism_session` table (canonical); a PrestaShop `Cart` is used transiently for pricing/shipping only.
 - **Handler fan-out** — multiple payment handlers coexist. The registry calls `prepareCheckoutPayment` on all handlers at session creation; the agent selects which to pay with at complete time.
-- **Binding guard before settle** — the signed x402 credential is validated (network / asset / recipient / amount, BigInt-safe) against the stored quote *before* any settlement call (NFR-1).
+- **Binding guard before settle** — the signed x402 credential must name a stored requirement (scheme / network / asset / recipient / amount, exact) and carry a signature, a nonce and a live validity window *before* any settlement call (NFR-1). Settlement is sent to Prism from the stored requirement and resource only; requirements, version or extra fields written by the buyer are never forwarded.
 - **Multistore** — the shop is resolved from the request domain (PrestaShop native dispatch); every session/cart query is scoped by `id_shop` (FR-15).
 - **Plain merchant labels** — no x402/ERC-3009 jargon in the Back Office; it stays in code and developer docs.
 
