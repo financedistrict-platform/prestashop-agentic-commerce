@@ -100,6 +100,11 @@ final class FdTestPreparingHandler implements PaymentHandlerInterface
         return ['success' => false];
     }
 
+    public function preparedAmount(?array $checkoutMeta): ?int
+    {
+        return null;
+    }
+
     public function getUcpCheckoutHandlers(?array $paymentMeta = null): array
     {
         return [];

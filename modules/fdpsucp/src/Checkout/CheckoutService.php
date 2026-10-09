@@ -368,9 +368,11 @@ final class CheckoutService
         if (!$this->sessions->claimForCompletion($uid, $this->idShop())) {
             return UcpError::response('session_in_progress', 'Session is already being completed', 409);
         }
+        $session = $this->sessions->findByUid($uid, $this->idShop()) ?? $session;
 
         try {
             $cart = $this->cartBuilder->build($session, $this->context);
+            $this->cartBuilder->selectSessionCarrier($cart, json_decode($session['fulfillment'] ?? 'null', true));
         } catch (\Throwable $e) {
             $this->sessions->update($uid, $this->idShop(), ['status' => 'incomplete']);
             \PrestaShopLogger::addLog('[FD UCP] Cart build failed: ' . $e->getMessage(), 3);
@@ -378,7 +380,14 @@ final class CheckoutService
         }
 
         if (PaymentIntegrity::quoteError($session, $cart) !== null) {
-            return $this->requote($uid, $session, $cart);
+            try {
+                return $this->requote($uid, $session, $cart);
+            } catch (\Throwable $e) {
+                $this->sessions->update($uid, $this->idShop(), ['status' => 'incomplete']);
+                \PrestaShopLogger::addLog('[FD UCP] Requote failed: ' . $e->getMessage(), 3);
+
+                return UcpError::response('requote_failed', 'Could not re-quote this checkout session', 422);
+            }
         }
 
         try {
@@ -473,10 +482,7 @@ final class CheckoutService
         $fulfillment = null;
         $shipping = 0;
         if (is_array($dest) && !empty($dest['address_country']) && (int) $cart->id_address_delivery > 0) {
-            $selected = Fulfillment::selectedCarrierId($inputFulfillment);
-            if ($selected !== null && ctype_digit($selected)) {
-                $this->cartBuilder->selectCarrier($cart, (int) $selected);
-            }
+            $selected = $this->cartBuilder->selectSessionCarrier($cart, $inputFulfillment);
             $shipping = $this->cartBuilder->totals($cart)['shipping'];
             $lineItemIds = array_column($formatted, 'id');
             $fulfillment = Fulfillment::fromCart($cart, $dest, $lineItemIds, $selected);

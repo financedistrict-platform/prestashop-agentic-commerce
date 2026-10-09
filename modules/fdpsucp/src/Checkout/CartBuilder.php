@@ -85,6 +85,16 @@ class CartBuilder
         $cart->update();
     }
 
+    public function selectSessionCarrier(\Cart $cart, ?array $fulfillment): ?string
+    {
+        $selected = Fulfillment::selectedCarrierId($fulfillment);
+        if ($selected !== null && ctype_digit($selected)) {
+            $this->selectCarrier($cart, (int) $selected);
+        }
+
+        return $selected;
+    }
+
     /**
      * @return array{subtotal:int,shipping:int,total:int} minor units
      */

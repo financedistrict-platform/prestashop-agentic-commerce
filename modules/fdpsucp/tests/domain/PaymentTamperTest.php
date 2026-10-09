@@ -6,6 +6,7 @@ use FD\PrismDummy\DummyHandler;
 use FD\PrismUcp\Checkout\CartBuilder;
 use FD\PrismUcp\Checkout\CheckoutService;
 use FD\PrismUcp\Http\Response;
+use FD\PrismUcp\Payment\PaymentIntegrity;
 use FD\PrismUcp\Payment\PaymentRegistry;
 use FD\PrismUcp\Ucp\VersionRegistry;
 use PHPUnit\Framework\TestCase;
@@ -36,17 +37,29 @@ final class PaymentTamperTest extends TestCase
         $this->sessions = new FdTestMemorySessions([self::SESSION_ID => $session]);
         $this->handler = new FdTestRecordingPrismHandler();
         $this->cart = new Cart();
+        $this->sessions->rows[self::SESSION_ID]['payment_meta'] = json_encode(['xyz.fd.prism_payment' => ['prepared_amount' => 4695]]);
+    }
+
+    private function quote(int $total, ?int $prepared = null): void
+    {
+        $this->sessions->rows[self::SESSION_ID]['totals'] = json_encode([['type' => 'total', 'amount' => $total]]);
+        $this->sessions->rows[self::SESSION_ID]['payment_meta'] = json_encode(['xyz.fd.prism_payment' => ['prepared_amount' => $prepared ?? $total]]);
+    }
+
+    private function service(): CheckoutService
+    {
+        $registry = new PaymentRegistry();
+        $registry->register($this->handler);
+        $service = new CheckoutService(Context::getContext(), $registry, FdTestGoldenRenderer::ENDPOINT, hash('sha256', ''), self::SECRET);
+        (new ReflectionProperty(CheckoutService::class, 'sessions'))->setValue($service, $this->sessions);
+        (new ReflectionProperty(CheckoutService::class, 'cartBuilder'))->setValue($service, new FdTestFixedCartBuilder($this->cart));
+
+        return $service;
     }
 
     private function complete(): Response
     {
-        $registry = new PaymentRegistry();
-        $registry->register($this->handler);
-        $service = new CheckoutService(new Context(), $registry, FdTestGoldenRenderer::ENDPOINT, hash('sha256', ''), self::SECRET);
-        (new ReflectionProperty(CheckoutService::class, 'sessions'))->setValue($service, $this->sessions);
-        (new ReflectionProperty(CheckoutService::class, 'cartBuilder'))->setValue($service, new FdTestFixedCartBuilder($this->cart));
-
-        return $service->complete(self::SESSION_ID, ['payment' => ['instruments' => [self::INSTRUMENT]]], null);
+        return $this->service()->complete(self::SESSION_ID, ['payment' => ['instruments' => [self::INSTRUMENT]]], null);
     }
 
     private function row(): array
@@ -68,7 +81,7 @@ final class PaymentTamperTest extends TestCase
             [['type' => 'subtotal', 'amount' => 5000], ['type' => 'fulfillment', 'amount' => 495], ['type' => 'total', 'amount' => 5495]],
             json_decode($this->row()['totals'], true)
         );
-        $this->assertSame(['xyz.fd.prism_payment' => null], json_decode($this->row()['payment_meta'], true));
+        $this->assertSame(['xyz.fd.prism_payment' => ['prepared_amount' => 5495]], json_decode($this->row()['payment_meta'], true));
     }
 
     public function test_order_total_below_the_quote_is_requoted_and_never_settled(): void
@@ -100,10 +113,68 @@ final class PaymentTamperTest extends TestCase
         $this->assertCount(1, $this->handler->settled);
     }
 
+    public function test_prepared_amount_that_differs_from_the_quote_is_never_handed_to_the_handler(): void
+    {
+        $this->quote(4695, 1500);
+
+        $response = $this->complete();
+
+        $this->assertSame(422, $response->status, (string) json_encode($response->body));
+        $this->assertSame('payment_failed', $response->body['messages'][0]['code']);
+        $this->assertSame([], $this->handler->settled);
+        $this->assertSame('incomplete', $this->row()['status']);
+    }
+
+    public function test_missing_prepared_amount_is_never_handed_to_the_handler(): void
+    {
+        $this->sessions->rows[self::SESSION_ID]['payment_meta'] = json_encode(['xyz.fd.prism_payment' => null]);
+
+        $response = $this->complete();
+
+        $this->assertSame(422, $response->status, (string) json_encode($response->body));
+        $this->assertSame([], $this->handler->settled);
+    }
+
+    public function test_handler_is_given_the_verified_paid_amount(): void
+    {
+        $response = $this->complete();
+
+        $this->assertSame(200, $response->status, (string) json_encode($response->body));
+        $this->assertSame(4695, $this->handler->settled[0]['paid_amount'] ?? null);
+    }
+
+    public function test_completion_prices_the_carrier_selected_on_the_session(): void
+    {
+        $this->cart->id_address_delivery = 9;
+        $this->cart->carrierTotals = [7 => [Cart::ONLY_PRODUCTS => 42.00, Cart::ONLY_SHIPPING => 10.00, Cart::BOTH => 52.00]];
+        $this->quote(5200);
+
+        $response = $this->complete();
+
+        $this->assertSame(200, $response->status, (string) json_encode($response->body));
+        $this->assertCount(1, $this->handler->settled);
+        $this->assertSame([9 => '7,'], $this->cart->deliveryOption);
+    }
+
+    public function test_requote_failure_releases_the_session(): void
+    {
+        $this->handler = new FdTestRecordingPrismHandler(false, true);
+        $this->cart->orderTotals = [Cart::ONLY_PRODUCTS => 50.00, Cart::ONLY_SHIPPING => 4.95, Cart::BOTH => 54.95];
+
+        $response = $this->complete();
+
+        $this->assertSame(422, $response->status, (string) json_encode($response->body));
+        $this->assertSame('requote_failed', $response->body['messages'][0]['code']);
+        $this->assertSame('incomplete', $this->row()['status']);
+        $this->assertSame([], $this->handler->settled);
+    }
+
     private function dummySettle(?array $meta): array
     {
         $module = new PaymentModule();
-        $result = (new DummyHandler($module))->settlePayment([
+        $registry = new PaymentRegistry();
+        $registry->register(new DummyHandler($module));
+        $result = $registry->settle('dummy', [
             'session' => $this->row(),
             'cart' => $this->cart,
             'handler_id' => 'dummy',

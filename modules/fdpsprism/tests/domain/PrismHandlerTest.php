@@ -5,6 +5,7 @@ declare(strict_types=1);
 use FD\PrismPayment\Config\ConfigResolver;
 use FD\PrismPayment\Prism\PrismClient;
 use FD\PrismPayment\Prism\PrismHandler;
+use FD\PrismUcp\Payment\PaymentRegistry;
 use FD\PrismUcp\Ucp\RequestContext;
 use PHPUnit\Framework\TestCase;
 
@@ -32,6 +33,14 @@ final class PrismHandlerTest extends TestCase
     private function handler(): PrismHandler
     {
         return new PrismHandler($this->module, $this->client);
+    }
+
+    private function settleThroughCore(array $input): array
+    {
+        $registry = new PaymentRegistry();
+        $registry->register($this->handler());
+
+        return $registry->settle(PrismHandler::NS, $input);
     }
 
     private static function recorded(string $name): array
@@ -72,7 +81,7 @@ final class PrismHandlerTest extends TestCase
     {
         $this->client->responses['POST /api/v2/payment/settle'] = ['success' => true, 'transaction' => '0x' . str_repeat('cd', 32), 'network' => 'eip155:84532'];
 
-        return $this->handler()->settlePayment([
+        return $this->settleThroughCore([
             'session' => $this->session(),
             'cart' => new Cart(),
             'instrument_type' => $instrumentType,
@@ -216,7 +225,7 @@ final class PrismHandlerTest extends TestCase
         $cart = new Cart();
         $cart->total = 15.00;
 
-        $result = $this->handler()->settlePayment([
+        $result = $this->settleThroughCore([
             'session' => $this->session(1500),
             'cart' => $cart,
             'instrument_type' => 'x402',
@@ -353,7 +362,7 @@ final class PrismHandlerTest extends TestCase
         $this->client->responses['POST /api/v2/payment/settle'] = ['success' => true, 'transaction' => '0x' . str_repeat('cd', 32)];
         $meta = ['x402' => $this->checkoutMeta()[PrismHandler::NS]];
 
-        $result = $this->handler()->settlePayment([
+        $result = $this->settleThroughCore([
             'session' => $this->session(),
             'cart' => new Cart(),
             'instrument_type' => null,

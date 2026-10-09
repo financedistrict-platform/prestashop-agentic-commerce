@@ -3,7 +3,6 @@
 namespace FD\PrismDummy;
 
 use FD\PrismUcp\Payment\PaymentHandlerInterface;
-use FD\PrismUcp\Payment\PaymentIntegrity;
 use FD\PrismUcp\Ucp\Formatter;
 
 if (!defined('_PS_VERSION_')) {
@@ -88,10 +87,9 @@ final class DummyHandler implements PaymentHandlerInterface
             return ['success' => false, 'error' => 'Invalid customer'];
         }
 
-        $paidAmount = $input['checkout_meta'][$this->id()]['amount'] ?? null;
-        $amountError = PaymentIntegrity::settlementError($input['session'] ?? [], $cart, $paidAmount);
-        if ($amountError !== null) {
-            return ['success' => false, 'error' => $amountError];
+        $paidAmount = $input['paid_amount'] ?? null;
+        if (!is_int($paidAmount)) {
+            return ['success' => false, 'error' => 'Payment amount was not verified'];
         }
 
         $txRef = 'DUMMY-' . strtoupper(bin2hex(random_bytes(8)));
@@ -123,6 +121,13 @@ final class DummyHandler implements PaymentHandlerInterface
             'transaction_reference' => $txRef,
             'network' => 'test',
         ];
+    }
+
+    public function preparedAmount(?array $checkoutMeta): ?int
+    {
+        $amount = $checkoutMeta[$this->id()]['amount'] ?? null;
+
+        return is_int($amount) ? $amount : null;
     }
 
     /**
