@@ -41,7 +41,9 @@ class CartBuilder
         $cart->id_guest = (int) $context->cookie->id_guest;
         $cart->recyclable = 0;
         $cart->gift = 0;
-        $cart->add();
+        if (!$cart->add()) {
+            throw new \RuntimeException('The cart could not be created');
+        }
 
         $context->cart = $cart;
 
@@ -50,22 +52,32 @@ class CartBuilder
         if ($address !== null) {
             $cart->id_address_delivery = (int) $address->id;
             $cart->id_address_invoice = (int) $address->id;
-            $cart->update();
+            if (!$cart->update()) {
+                throw new \RuntimeException('The delivery address could not be saved on the cart');
+            }
         }
 
-        // Add line items.
         foreach ($this->decode($session['line_items'] ?? null) as $li) {
-            $idProduct = (int) ($li['item']['id'] ?? 0);
-            $idProductAttribute = (int) ($li['item']['variant_id'] ?? 0);
-            $qty = max(1, (int) ($li['quantity'] ?? 1));
-            if ($idProduct > 0) {
-                $cart->updateQty($qty, $idProduct, $idProductAttribute ?: null);
-            }
+            $this->addLine($cart, $li);
         }
 
         $this->applySessionCarrier($cart, $session);
 
         return $cart;
+    }
+
+    private function addLine(\Cart $cart, mixed $line): void
+    {
+        $node = is_array($line) && is_array($line['item'] ?? null) ? $line['item'] : [];
+        $idProduct = LineItems::positiveInt($node['id'] ?? null);
+        $idVariant = LineItems::variantId($node['variant_id'] ?? null);
+        $quantity = LineItems::quantity(is_array($line) ? ($line['quantity'] ?? null) : null);
+        if ($idProduct === null || $idVariant === null || $quantity === null) {
+            throw new \RuntimeException('The checkout session holds a line item that is not valid');
+        }
+        if ($cart->updateQty($quantity, $idProduct, $idVariant ?: null) !== true) {
+            throw new \RuntimeException("Product $idProduct could not be added to the cart");
+        }
     }
 
     public function pinCurrency(array $session, \Context $context): int
@@ -206,7 +218,9 @@ class CartBuilder
             $address->id_state = $idState;
         }
 
-        $address->add();
+        if (!$address->add()) {
+            throw new \RuntimeException('The delivery address could not be saved');
+        }
 
         return $address;
     }

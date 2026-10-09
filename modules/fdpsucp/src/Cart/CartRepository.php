@@ -12,7 +12,7 @@ if (!defined('_PS_VERSION_')) {
  * a shop id (multistore isolation, FR-15). A cart is a lightweight holder of
  * line items; it is converted into a canonical ps_prism_session on checkout.
  */
-final class CartRepository
+class CartRepository
 {
     private string $table;
 

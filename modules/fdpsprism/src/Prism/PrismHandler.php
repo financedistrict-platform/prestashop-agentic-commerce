@@ -3,7 +3,10 @@
 namespace FD\PrismPayment\Prism;
 
 use FD\PrismPayment\Config\ConfigResolver;
+use FD\PrismUcp\Payment\DbReplayLedger;
 use FD\PrismUcp\Payment\PaymentHandlerInterface;
+use FD\PrismUcp\Payment\ReplayKey;
+use FD\PrismUcp\Payment\ReplayLedger;
 use FD\PrismUcp\Payment\VersionedPaymentHandlerInterface;
 use FD\PrismUcp\Ucp\Formatter;
 use FD\PrismUcp\Ucp\RequestContext;
@@ -30,8 +33,13 @@ final class PrismHandler implements PaymentHandlerInterface, VersionedPaymentHan
 
     private const LEGACY_INSTRUMENT_TYPES = ['tokenized', 'default'];
 
-    public function __construct(private \PaymentModule $module, private ?PrismClient $client = null)
+    public function __construct(private \PaymentModule $module, private ?PrismClient $client = null, private ?ReplayLedger $ledger = null)
     {
+    }
+
+    private function ledger(): ReplayLedger
+    {
+        return $this->ledger ??= new DbReplayLedger();
     }
 
     public static function cacheKey(string $gateway, string $ucpVersion): string
@@ -232,6 +240,16 @@ final class PrismHandler implements PaymentHandlerInterface, VersionedPaymentHan
         if (is_string($payment)) {
             return ['success' => false, 'error' => $payment];
         }
+        $authorizationKey = ReplayKey::authorization(
+            $payment->network,
+            (string) $payment->requirements['asset'],
+            (string) $payment->paymentPayload['payload']['authorization']['from'],
+            (string) $payment->paymentPayload['payload']['authorization']['nonce']
+        );
+        $claimError = $this->claimError($input['session'] ?? null, $authorizationKey);
+        if ($claimError !== null) {
+            return ['success' => false, 'error' => $claimError];
+        }
         $result = $this->client()->settle($payment->version, $payment->paymentPayload, $payment->requirements);
         if (!$result) {
             return ['success' => false, 'error' => 'Prism settlement request failed'];
@@ -250,7 +268,43 @@ final class PrismHandler implements PaymentHandlerInterface, VersionedPaymentHan
             return ['success' => false, 'error' => 'Settlement network does not match the signed payment'];
         }
 
+        if (!$this->recorded($authorizationKey, ReplayKey::transaction($txRef))) {
+            \PrestaShopLogger::addLog('[FD Prism] Settlement transaction ' . $txRef . ' could not be bound to this payment; no order placed', 3);
+
+            return ['success' => false, 'error' => 'Settlement transaction was already used by another payment'];
+        }
+
         return $this->placeOrder($input['cart'], $txRef, $payment->network, Formatter::toMajor($paidAmount));
+    }
+
+    private function claimError(mixed $session, string $authorizationKey): ?string
+    {
+        $sessionUid = is_array($session) ? ($session['session_uid'] ?? null) : null;
+        if (!is_string($sessionUid) || $sessionUid === '') {
+            return 'Checkout session is missing';
+        }
+        try {
+            if ($this->ledger()->claim($sessionUid, $authorizationKey)) {
+                return null;
+            }
+        } catch (\Throwable $e) {
+            \PrestaShopLogger::addLog('[FD Prism] Payment replay ledger unavailable: ' . $e->getMessage(), 3);
+
+            return 'Payment replay protection is unavailable';
+        }
+
+        return 'Payment authorization was already used';
+    }
+
+    private function recorded(string $authorizationKey, string $transactionKey): bool
+    {
+        try {
+            return $this->ledger()->recordTransaction($authorizationKey, $transactionKey);
+        } catch (\Throwable $e) {
+            \PrestaShopLogger::addLog('[FD Prism] Payment replay ledger unavailable: ' . $e->getMessage(), 3);
+
+            return false;
+        }
     }
 
     private function storedQuote(?array $checkoutMeta): mixed

@@ -73,40 +73,9 @@ final class CheckoutService
             return UcpError::response('invalid_currency', $e->getMessage(), 422);
         }
 
-        $formatted = [];
-        foreach ($lineItems as $item) {
-            $idProduct = (int) ($item['item']['id'] ?? 0);
-            $idAttr = (int) ($item['item']['variant_id'] ?? 0);
-            $qty = (int) ($item['quantity'] ?? 1);
-            if ($qty < 1) {
-                return UcpError::response('invalid_quantity', "Quantity for product $idProduct must be a positive integer", 422);
-            }
-
-            $product = new \Product($idProduct, false, $idLang);
-            if (!\Validate::isLoadedObject($product) || !$product->active) {
-                return UcpError::response('invalid_product', "Product $idProduct not found or not purchasable", 422);
-            }
-            if ($stockError = $this->checkStock($idProduct, $idAttr, $qty, $product)) {
-                return $stockError;
-            }
-
-            $price = Formatter::toMinor((float) \Product::getPriceStatic($idProduct, true, $idAttr ?: null));
-            $itemTotal = $price * $qty;
-            $name = is_array($product->name) ? ($product->name[$idLang] ?? reset($product->name)) : $product->name;
-
-            $entry = [
-                'id' => 'li_' . (count($formatted) + 1),
-                'item' => ['id' => (string) $idProduct, 'title' => (string) $name, 'price' => $price],
-                'quantity' => $qty,
-                'totals' => [
-                    ['type' => 'subtotal', 'amount' => $itemTotal],
-                    ['type' => 'total', 'amount' => $itemTotal],
-                ],
-            ];
-            if ($idAttr > 0) {
-                $entry['item']['variant_id'] = (string) $idAttr;
-            }
-            $formatted[] = $entry;
+        $formatted = LineItems::format($lineItems, $idLang);
+        if ($formatted instanceof Response) {
+            return $formatted;
         }
 
         $buyer = $this->extractBuyer($body['buyer'] ?? null);
@@ -210,37 +179,9 @@ final class CheckoutService
 
         // Line items (full replace)
         if (!empty($body['line_items']) && is_array($body['line_items'])) {
-            $formatted = [];
-            foreach ($body['line_items'] as $item) {
-                $idProduct = (int) ($item['item']['id'] ?? 0);
-                $idAttr = (int) ($item['item']['variant_id'] ?? 0);
-                $qty = (int) ($item['quantity'] ?? 1);
-                if ($qty < 1) {
-                    return UcpError::response('invalid_quantity', "Quantity for product $idProduct must be a positive integer", 422);
-                }
-                $product = new \Product($idProduct, false, $idLang);
-                if (!\Validate::isLoadedObject($product) || !$product->active) {
-                    return UcpError::response('invalid_product', "Product $idProduct not found", 422);
-                }
-                if ($stockError = $this->checkStock($idProduct, $idAttr, $qty, $product)) {
-                    return $stockError;
-                }
-                $price = Formatter::toMinor((float) \Product::getPriceStatic($idProduct, true, $idAttr ?: null));
-                $itemTotal = $price * $qty;
-                $name = is_array($product->name) ? ($product->name[$idLang] ?? reset($product->name)) : $product->name;
-                $entry = [
-                    'id' => $item['id'] ?? ('li_' . (count($formatted) + 1)),
-                    'item' => ['id' => (string) $idProduct, 'title' => (string) $name, 'price' => $price],
-                    'quantity' => $qty,
-                    'totals' => [
-                        ['type' => 'subtotal', 'amount' => $itemTotal],
-                        ['type' => 'total', 'amount' => $itemTotal],
-                    ],
-                ];
-                if ($idAttr > 0) {
-                    $entry['item']['variant_id'] = (string) $idAttr;
-                }
-                $formatted[] = $entry;
+            $formatted = LineItems::format($body['line_items'], $idLang, true);
+            if ($formatted instanceof Response) {
+                return $formatted;
             }
         }
 
@@ -668,28 +609,6 @@ final class CheckoutService
             default:
                 return null;
         }
-    }
-
-    /**
-     * Reject a line item whose quantity exceeds available stock, unless the
-     * product allows ordering when out of stock (backorders). Returns a UcpError
-     * Response on failure, or null when the quantity is orderable.
-     */
-    private function checkStock(int $idProduct, int $idAttr, int $qty, \Product $product): ?Response
-    {
-        if (\Product::isAvailableWhenOutOfStock((int) $product->out_of_stock)) {
-            return null;
-        }
-        $available = (int) \StockAvailable::getQuantityAvailableByProduct($idProduct, $idAttr ?: null);
-        if ($qty > $available) {
-            return UcpError::response(
-                'insufficient_stock',
-                "Requested quantity ($qty) exceeds available stock ($available) for product $idProduct",
-                422
-            );
-        }
-
-        return null;
     }
 
     private static function uuid(): string

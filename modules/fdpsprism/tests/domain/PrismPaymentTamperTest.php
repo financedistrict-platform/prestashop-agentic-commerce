@@ -5,6 +5,7 @@ declare(strict_types=1);
 use FD\PrismPayment\Config\ConfigResolver;
 use FD\PrismPayment\Prism\PrismHandler;
 use FD\PrismUcp\Payment\PaymentRegistry;
+use FD\PrismUcp\Payment\ReplayKey;
 use FD\PrismUcp\Ucp\RequestContext;
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
@@ -15,6 +16,7 @@ final class PrismPaymentTamperTest extends TestCase
 
     private FdTestPrismClient $client;
     private PaymentModule $module;
+    private FdTestMemoryReplayLedger $ledger;
     private Cart $cart;
 
     protected function setUp(): void
@@ -28,6 +30,7 @@ final class PrismPaymentTamperTest extends TestCase
         $this->client = new FdTestPrismClient();
         $this->client->responses[self::SETTLE] = ['success' => true, 'transaction' => '0x' . str_repeat('cd', 32), 'network' => FdTestX402::NETWORK];
         $this->module = new PaymentModule();
+        $this->ledger = new FdTestMemoryReplayLedger();
         $this->cart = new Cart();
     }
 
@@ -39,7 +42,7 @@ final class PrismPaymentTamperTest extends TestCase
         }
 
         return $this->settleThroughCore([
-            'session' => ['totals' => json_encode([['type' => 'total', 'amount' => $quotedTotal]]), 'fulfillment' => FdTestShipping::FULFILLMENT, 'expires_at' => $expiresAt ?? FdTestShipping::liveQuote()],
+            'session' => ['session_uid' => FdTestX402::SESSION_UID, 'totals' => json_encode([['type' => 'total', 'amount' => $quotedTotal]]), 'fulfillment' => FdTestShipping::FULFILLMENT, 'expires_at' => $expiresAt ?? FdTestShipping::liveQuote()],
             'cart' => $this->cart,
             'instrument_type' => 'x402',
             'credential' => FdTestX402::credential($tokenAmount),
@@ -55,7 +58,7 @@ final class PrismPaymentTamperTest extends TestCase
         }
 
         return $this->settleThroughCore([
-            'session' => ['totals' => json_encode([['type' => 'total', 'amount' => 4695]]), 'fulfillment' => FdTestShipping::FULFILLMENT, 'expires_at' => FdTestShipping::liveQuote()],
+            'session' => ['session_uid' => FdTestX402::SESSION_UID, 'totals' => json_encode([['type' => 'total', 'amount' => 4695]]), 'fulfillment' => FdTestShipping::FULFILLMENT, 'expires_at' => FdTestShipping::liveQuote()],
             'cart' => $this->cart,
             'instrument_type' => 'x402',
             'credential' => $tamper(FdTestX402::credential('4695')),
@@ -66,7 +69,7 @@ final class PrismPaymentTamperTest extends TestCase
     private function settleThroughCore(array $input): array
     {
         $registry = new PaymentRegistry();
-        $registry->register(new PrismHandler($this->module, $this->client));
+        $registry->register(new PrismHandler($this->module, $this->client, $this->ledger));
 
         return $registry->settle(PrismHandler::NS, $input);
     }
@@ -107,8 +110,8 @@ final class PrismPaymentTamperTest extends TestCase
 
     public function test_handler_called_without_a_verified_paid_amount_places_no_order(): void
     {
-        $result = (new PrismHandler($this->module, $this->client))->settlePayment([
-            'session' => ['totals' => json_encode([['type' => 'total', 'amount' => 4695]]), 'fulfillment' => FdTestShipping::FULFILLMENT, 'expires_at' => FdTestShipping::liveQuote()],
+        $result = (new PrismHandler($this->module, $this->client, $this->ledger))->settlePayment([
+            'session' => ['session_uid' => FdTestX402::SESSION_UID, 'totals' => json_encode([['type' => 'total', 'amount' => 4695]]), 'fulfillment' => FdTestShipping::FULFILLMENT, 'expires_at' => FdTestShipping::liveQuote()],
             'cart' => $this->cart,
             'instrument_type' => 'x402',
             'credential' => FdTestX402::credential('4695'),
@@ -157,7 +160,7 @@ final class PrismPaymentTamperTest extends TestCase
         $this->cart->total = 0.0;
 
         $result = $this->settleThroughCore([
-            'session' => ['totals' => null, 'fulfillment' => FdTestShipping::FULFILLMENT],
+            'session' => ['session_uid' => FdTestX402::SESSION_UID, 'totals' => null, 'fulfillment' => FdTestShipping::FULFILLMENT],
             'cart' => $this->cart,
             'instrument_type' => 'x402',
             'credential' => FdTestX402::credential('0'),
@@ -231,7 +234,7 @@ final class PrismPaymentTamperTest extends TestCase
         $this->client->responses[self::SETTLE]['network'] = 'eip155:8453';
 
         $result = $this->settleThroughCore([
-            'session' => ['totals' => json_encode([['type' => 'total', 'amount' => 4695]]), 'fulfillment' => FdTestShipping::FULFILLMENT, 'expires_at' => FdTestShipping::liveQuote()],
+            'session' => ['session_uid' => FdTestX402::SESSION_UID, 'totals' => json_encode([['type' => 'total', 'amount' => 4695]]), 'fulfillment' => FdTestShipping::FULFILLMENT, 'expires_at' => FdTestShipping::liveQuote()],
             'cart' => $this->cart,
             'instrument_type' => 'x402',
             'credential' => $credential,
@@ -379,5 +382,142 @@ final class PrismPaymentTamperTest extends TestCase
         $this->assertTrue($result['success'], (string) ($result['error'] ?? ''));
         $this->assertContains(self::SETTLE, $this->client->paths);
         $this->assertSame(46.95, $this->module->validated[0][2]);
+    }
+
+    private function settleOnSession(string $sessionUid, array $credential, string $amount = '4695'): array
+    {
+        return $this->settleThroughCore([
+            'session' => ['session_uid' => $sessionUid, 'totals' => json_encode([['type' => 'total', 'amount' => (int) $amount]]), 'fulfillment' => FdTestShipping::FULFILLMENT, 'expires_at' => FdTestShipping::liveQuote()],
+            'cart' => $this->cart,
+            'instrument_type' => 'x402',
+            'credential' => $credential,
+            'checkout_meta' => [PrismHandler::NS => FdTestX402::checkoutMeta($amount)],
+        ]);
+    }
+
+    private function settleRequests(): int
+    {
+        return count(array_keys($this->client->paths, self::SETTLE, true));
+    }
+
+    public function test_authorization_that_already_paid_one_session_is_never_settled_for_another(): void
+    {
+        $credential = FdTestX402::credential('4695');
+
+        $first = $this->settleOnSession(FdTestX402::SESSION_UID, $credential);
+        $second = $this->settleOnSession(FdTestX402::OTHER_SESSION_UID, $credential);
+
+        $this->assertTrue($first['success'], (string) ($first['error'] ?? ''));
+        $this->assertFalse($second['success']);
+        $this->assertSame(1, $this->settleRequests());
+        $this->assertCount(1, $this->module->validated);
+    }
+
+    public function test_authorization_claimed_by_another_session_is_never_sent_to_the_gateway(): void
+    {
+        $credential = FdTestX402::credential('4695');
+        $authorization = $credential['paymentPayload']['payload']['authorization'];
+        $key = ReplayKey::authorization(FdTestX402::NETWORK, FdTestX402::ASSET, $authorization['from'], $authorization['nonce']);
+        $this->ledger->claims[$key] = FdTestX402::OTHER_SESSION_UID;
+
+        $this->assertNothingCharged($this->settleOnSession(FdTestX402::SESSION_UID, $credential));
+    }
+
+    public function test_replayed_authorization_is_matched_regardless_of_address_and_nonce_case(): void
+    {
+        $this->settleOnSession(FdTestX402::SESSION_UID, FdTestX402::credential('4695'));
+        $shouted = FdTestX402::credential('4695', '0x' . strtoupper(str_repeat('ab', 32)), '0x' . strtoupper(substr(FdTestX402::PAYER, 2)));
+
+        $result = $this->settleOnSession(FdTestX402::OTHER_SESSION_UID, $shouted);
+
+        $this->assertFalse($result['success']);
+        $this->assertSame(1, $this->settleRequests());
+    }
+
+    public function test_the_same_nonce_from_another_payer_is_a_different_authorization(): void
+    {
+        $first = $this->settleOnSession(FdTestX402::SESSION_UID, FdTestX402::credential('4695'));
+        $this->client->responses[self::SETTLE]['transaction'] = '0x' . str_repeat('ee', 32);
+        $second = $this->settleOnSession(FdTestX402::OTHER_SESSION_UID, FdTestX402::credential('4695', null, '0x3333333333333333333333333333333333333333'));
+
+        $this->assertTrue($first['success'], (string) ($first['error'] ?? ''));
+        $this->assertTrue($second['success'], (string) ($second['error'] ?? ''));
+        $this->assertCount(2, $this->module->validated);
+    }
+
+    public function test_transaction_already_used_by_another_session_places_no_order(): void
+    {
+        $first = $this->settleOnSession(FdTestX402::SESSION_UID, FdTestX402::credential('4695'));
+        $second = $this->settleOnSession(FdTestX402::OTHER_SESSION_UID, FdTestX402::credential('4695', '0x' . str_repeat('ef', 32)));
+
+        $this->assertTrue($first['success'], (string) ($first['error'] ?? ''));
+        $this->assertFalse($second['success']);
+        $this->assertCount(1, $this->module->validated);
+    }
+
+    public function test_transaction_that_cannot_be_recorded_places_no_order(): void
+    {
+        $this->ledger->refuseTransactions = true;
+
+        $result = $this->settleOnSession(FdTestX402::SESSION_UID, FdTestX402::credential('4695'));
+
+        $this->assertFalse($result['success']);
+        $this->assertSame([], $this->module->validated);
+    }
+
+    public function test_unavailable_replay_ledger_never_settles(): void
+    {
+        $this->ledger->unavailable = true;
+
+        $this->assertNothingCharged($this->settleOnSession(FdTestX402::SESSION_UID, FdTestX402::credential('4695')));
+    }
+
+    public function test_session_without_an_identifier_is_never_settled(): void
+    {
+        $this->assertNothingCharged($this->settleOnSession('', FdTestX402::credential('4695')));
+    }
+
+    public function test_same_session_can_settle_again_when_the_order_could_not_be_placed(): void
+    {
+        $module = new FdTestFlakyPaymentModule();
+        $this->module = $module;
+        $credential = FdTestX402::credential('4695');
+
+        $first = $this->settleOnSession(FdTestX402::SESSION_UID, $credential);
+        $module->failing = false;
+        $second = $this->settleOnSession(FdTestX402::SESSION_UID, $credential);
+
+        $this->assertFalse($first['success']);
+        $this->assertTrue($second['success'], (string) ($second['error'] ?? ''));
+        $this->assertCount(1, $module->validated);
+    }
+
+    public function test_failed_settlement_keeps_the_authorization_bound_to_its_session(): void
+    {
+        $this->client->responses[self::SETTLE] = ['success' => false, 'error' => 'insufficient_funds'];
+        $credential = FdTestX402::credential('4695');
+
+        $failed = $this->settleOnSession(FdTestX402::SESSION_UID, $credential);
+        $this->client->responses[self::SETTLE] = ['success' => true, 'transaction' => '0x' . str_repeat('cd', 32), 'network' => FdTestX402::NETWORK];
+        $elsewhere = $this->settleOnSession(FdTestX402::OTHER_SESSION_UID, $credential);
+        $again = $this->settleOnSession(FdTestX402::SESSION_UID, $credential);
+
+        $this->assertFalse($failed['success']);
+        $this->assertFalse($elsewhere['success']);
+        $this->assertTrue($again['success'], (string) ($again['error'] ?? ''));
+    }
+}
+
+final class FdTestFlakyPaymentModule extends PaymentModule
+{
+    public bool $failing = true;
+
+    public function validateOrder(...$args)
+    {
+        if ($this->failing) {
+            throw new RuntimeException('order could not be placed');
+        }
+
+        return parent::validateOrder(...$args);
     }
 }

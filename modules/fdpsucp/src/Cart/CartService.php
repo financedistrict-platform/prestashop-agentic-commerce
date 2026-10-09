@@ -3,10 +3,10 @@
 namespace FD\PrismUcp\Cart;
 
 use FD\PrismUcp\Checkout\CheckoutService;
+use FD\PrismUcp\Checkout\LineItems;
 use FD\PrismUcp\Http\Response;
 use FD\PrismUcp\Payment\PaymentRegistry;
 use FD\PrismUcp\Ucp\CapabilitySecret;
-use FD\PrismUcp\Ucp\Formatter;
 use FD\PrismUcp\Ucp\RequestContext;
 use FD\PrismUcp\Ucp\UcpError;
 use FD\PrismUcp\Ucp\VersionPin;
@@ -52,7 +52,7 @@ final class CartService
             return UcpError::response('missing_line_items', 'line_items array is required', 400);
         }
 
-        $formatted = $this->formatLineItems($lineItems);
+        $formatted = LineItems::format($lineItems, (int) $this->context->language->id);
         if ($formatted instanceof Response) {
             return $formatted;
         }
@@ -119,7 +119,7 @@ final class CartService
             return UcpError::response('missing_line_items', 'line_items array is required', 400);
         }
 
-        $formatted = $this->formatLineItems($lineItems);
+        $formatted = LineItems::format($lineItems, (int) $this->context->language->id);
         if ($formatted instanceof Response) {
             return $formatted;
         }
@@ -216,63 +216,6 @@ final class CartService
     }
 
     // --------------------------------------------------------------- helpers
-
-    /**
-     * Build formatted line items from agent input, or return a UcpError
-     * Response if any product is invalid. Mirrors CheckoutService line pricing.
-     *
-     * @param array<int,mixed> $lineItems
-     * @return array<int,array<string,mixed>>|Response
-     */
-    private function formatLineItems(array $lineItems)
-    {
-        $idLang = (int) $this->context->language->id;
-        $formatted = [];
-
-        foreach ($lineItems as $item) {
-            $idProduct = (int) ($item['item']['id'] ?? 0);
-            $idAttr = (int) ($item['item']['variant_id'] ?? 0);
-            $qty = (int) ($item['quantity'] ?? 1);
-            if ($qty < 1) {
-                return UcpError::response('invalid_quantity', "Quantity for product $idProduct must be a positive integer", 422);
-            }
-
-            $product = new \Product($idProduct, false, $idLang);
-            if (!\Validate::isLoadedObject($product) || !$product->active) {
-                return UcpError::response('invalid_product', "Product $idProduct not found or not purchasable", 422);
-            }
-            if (!\Product::isAvailableWhenOutOfStock((int) $product->out_of_stock)) {
-                $available = (int) \StockAvailable::getQuantityAvailableByProduct($idProduct, $idAttr ?: null);
-                if ($qty > $available) {
-                    return UcpError::response(
-                        'insufficient_stock',
-                        "Requested quantity ($qty) exceeds available stock ($available) for product $idProduct",
-                        422
-                    );
-                }
-            }
-
-            $price = Formatter::toMinor((float) \Product::getPriceStatic($idProduct, true, $idAttr ?: null));
-            $itemTotal = $price * $qty;
-            $name = is_array($product->name) ? ($product->name[$idLang] ?? reset($product->name)) : $product->name;
-
-            $entry = [
-                'id' => 'li_' . (count($formatted) + 1),
-                'item' => ['id' => (string) $idProduct, 'title' => (string) $name, 'price' => $price],
-                'quantity' => $qty,
-                'totals' => [
-                    ['type' => 'subtotal', 'amount' => $itemTotal],
-                    ['type' => 'total', 'amount' => $itemTotal],
-                ],
-            ];
-            if ($idAttr > 0) {
-                $entry['item']['variant_id'] = (string) $idAttr;
-            }
-            $formatted[] = $entry;
-        }
-
-        return $formatted;
-    }
 
     /**
      * @param array<string,mixed> $cart

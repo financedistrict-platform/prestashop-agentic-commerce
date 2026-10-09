@@ -73,6 +73,9 @@ class Module
 class Db
 {
     public static array $statements = [];
+    public static ?PDO $pdo = null;
+    public static int $affected = 0;
+    public static bool $failing = false;
 
     public static function getInstance(): self
     {
@@ -82,8 +85,16 @@ class Db
     public function execute($sql): bool
     {
         self::$statements[] = $sql;
+        if (self::$failing) {
+            return false;
+        }
+        if (self::$pdo === null) {
+            return true;
+        }
+        $changed = self::$pdo->exec(preg_replace('/^(INSERT|UPDATE) IGNORE/', '$1 OR IGNORE', $sql));
+        self::$affected = $changed === false ? 0 : $changed;
 
-        return true;
+        return $changed !== false;
     }
 
     public function executeS($sql): array
@@ -93,13 +104,27 @@ class Db
 
     public function getValue($sql)
     {
-        return false;
+        if (self::$pdo === null) {
+            return false;
+        }
+
+        return self::$pdo->query($sql)->fetchColumn();
+    }
+
+    public function Affected_Rows(): int
+    {
+        return self::$affected;
     }
 }
 
 function bqSQL($value): string
 {
     return (string) $value;
+}
+
+function pSQL($value, $htmlOk = false): string
+{
+    return str_replace("'", "''", (string) $value);
 }
 
 class PaymentModule extends Module
@@ -167,6 +192,7 @@ class Customer
 class Address
 {
     public static array $created = [];
+    public static bool $failAdd = false;
 
     public $id;
     public $id_customer;
@@ -182,6 +208,9 @@ class Address
 
     public function add(): bool
     {
+        if (self::$failAdd) {
+            return false;
+        }
         $this->id = 700 + count(self::$created);
         self::$created[] = $this;
 
@@ -365,6 +394,22 @@ class Product
     }
 }
 
+class Combination
+{
+    public static array $products = [11 => 101, 12 => 205];
+
+    public $id;
+    public $id_product = 0;
+
+    public function __construct($id = null)
+    {
+        if ($id !== null && isset(self::$products[(int) $id])) {
+            $this->id = (int) $id;
+            $this->id_product = self::$products[(int) $id];
+        }
+    }
+}
+
 class Validate
 {
     public static function isLoadedObject($object): bool
@@ -390,6 +435,7 @@ class Cart
     public const ONLY_SHIPPING = 5;
 
     public static array $added = [];
+    public static bool $rejectQuantity = false;
 
     public $id = 77;
     public $id_shop;
@@ -423,7 +469,7 @@ class Cart
 
     public function updateQty($quantity, $idProduct, $idProductAttribute = null)
     {
-        return true;
+        return !self::$rejectQuantity;
     }
 
     public function isVirtualCart()
@@ -487,6 +533,9 @@ final class FdTestStubs
         Hook::$calls = [];
         Module::$hooks = [];
         Db::$statements = [];
+        Db::$pdo = null;
+        Db::$affected = 0;
+        Db::$failing = false;
         Product::$prices = [];
         Currency::$deleted = [];
         Currency::$inactive = [];
@@ -498,6 +547,8 @@ final class FdTestStubs
         Customer::$failAdd = false;
         Address::$created = [];
         Cart::$added = [];
+        Cart::$rejectQuantity = false;
+        Address::$failAdd = false;
         PrestaShopLogger::$logs = [];
         \FD\PrismUcp\Ucp\RequestContext::set(null);
         \FD\PrismUcp\Ucp\AgentProfileFetcher::resetCache();

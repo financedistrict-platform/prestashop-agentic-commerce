@@ -6,6 +6,7 @@ use FD\PrismPayment\Config\ConfigResolver;
 use FD\PrismPayment\Prism\PrismClient;
 use FD\PrismPayment\Prism\PrismHandler;
 use FD\PrismUcp\Payment\PaymentRegistry;
+use FD\PrismUcp\Payment\ReplayLedger;
 use FD\PrismUcp\Ucp\RequestContext;
 use PHPUnit\Framework\TestCase;
 
@@ -17,6 +18,7 @@ final class PrismHandlerTest extends TestCase
 
     private FdTestPrismClient $client;
     private PaymentModule $module;
+    private FdTestMemoryReplayLedger $ledger;
 
     protected function setUp(): void
     {
@@ -28,11 +30,12 @@ final class PrismHandlerTest extends TestCase
         RequestContext::set(null);
         $this->client = new FdTestPrismClient();
         $this->module = new PaymentModule();
+        $this->ledger = new FdTestMemoryReplayLedger();
     }
 
     private function handler(): PrismHandler
     {
-        return new PrismHandler($this->module, $this->client);
+        return new PrismHandler($this->module, $this->client, $this->ledger);
     }
 
     private function settleThroughCore(array $input): array
@@ -60,7 +63,7 @@ final class PrismHandlerTest extends TestCase
 
     private function session(int $total = 4695): array
     {
-        return ['totals' => json_encode([['type' => 'total', 'amount' => $total]]), 'fulfillment' => FdTestShipping::FULFILLMENT, 'expires_at' => FdTestShipping::liveQuote()];
+        return ['session_uid' => FdTestX402::SESSION_UID, 'totals' => json_encode([['type' => 'total', 'amount' => $total]]), 'fulfillment' => FdTestShipping::FULFILLMENT, 'expires_at' => FdTestShipping::liveQuote()];
     }
 
     private function settle(mixed $instrumentType, mixed $credential): array
@@ -424,5 +427,48 @@ final class FdTestPrismClient extends PrismClient
         $this->bodies["$method $path"] = $body;
 
         return $this->responses["$method $path"] ?? null;
+    }
+}
+
+final class FdTestMemoryReplayLedger implements ReplayLedger
+{
+    public array $claims = [];
+    public array $transactions = [];
+    public bool $unavailable = false;
+    public bool $refuseTransactions = false;
+
+    public function claim(string $sessionUid, string $authorizationKey): bool
+    {
+        $this->guard();
+        if (isset($this->claims[$authorizationKey])) {
+            return $this->claims[$authorizationKey] === $sessionUid;
+        }
+        $this->claims[$authorizationKey] = $sessionUid;
+
+        return true;
+    }
+
+    public function recordTransaction(string $authorizationKey, string $transactionKey): bool
+    {
+        $this->guard();
+        if ($this->refuseTransactions || !isset($this->claims[$authorizationKey])) {
+            return false;
+        }
+        if (isset($this->transactions[$transactionKey])) {
+            return $this->transactions[$transactionKey] === $authorizationKey;
+        }
+        if (in_array($authorizationKey, $this->transactions, true)) {
+            return false;
+        }
+        $this->transactions[$transactionKey] = $authorizationKey;
+
+        return true;
+    }
+
+    private function guard(): void
+    {
+        if ($this->unavailable) {
+            throw new RuntimeException('replay ledger unavailable');
+        }
     }
 }
