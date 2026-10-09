@@ -3,6 +3,7 @@
 namespace FD\PrismUcp\Checkout;
 
 use FD\PrismUcp\Http\Response;
+use FD\PrismUcp\Payment\PaymentIntegrity;
 use FD\PrismUcp\Payment\PaymentRegistry;
 use FD\PrismUcp\Ucp\CapabilitySecret;
 use FD\PrismUcp\Ucp\Formatter;
@@ -376,6 +377,10 @@ final class CheckoutService
             return UcpError::response('cart_build_failed', 'Could not build the cart for this session', 422);
         }
 
+        if (PaymentIntegrity::quoteError($session, $cart) !== null) {
+            return $this->requote($uid, $session, $cart);
+        }
+
         try {
             $result = $this->registry->settle($handlerId, [
                 'session' => $session,
@@ -477,13 +482,38 @@ final class CheckoutService
             $fulfillment = Fulfillment::fromCart($cart, $dest, $lineItemIds, $selected);
         }
 
+        return [self::totalsList($subtotal, $shipping, $subtotal + $shipping), $fulfillment];
+    }
+
+    private static function totalsList(int $subtotal, int $shipping, int $total): array
+    {
         $totals = [['type' => 'subtotal', 'amount' => $subtotal]];
         if ($shipping > 0) {
             $totals[] = ['type' => 'fulfillment', 'amount' => $shipping];
         }
-        $totals[] = ['type' => 'total', 'amount' => $subtotal + $shipping];
+        $totals[] = ['type' => 'total', 'amount' => $total];
 
-        return [$totals, $fulfillment];
+        return $totals;
+    }
+
+    private function requote(string $uid, array $session, \Cart $cart): Response
+    {
+        $amounts = $this->cartBuilder->totals($cart);
+        $totals = self::totalsList($amounts['subtotal'], $amounts['shipping'], $amounts['total']);
+        $this->sessions->update($uid, $this->idShop(), [
+            'status' => 'incomplete',
+            'totals' => json_encode($totals),
+            'payment_meta' => json_encode($this->registry->prepareAll(
+                $this->prepareInput($uid, $totals, (string) $session['currency'])
+            )),
+            'updated_at' => date('Y-m-d H:i:s'),
+        ]);
+
+        return UcpError::response(
+            'quote_changed',
+            'The order total no longer matches the quote. The session was re-quoted; fetch it and pay the new amount.',
+            409
+        );
     }
 
     /**

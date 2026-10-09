@@ -60,7 +60,12 @@ final class PrismHandlerTest extends TestCase
             'asset' => self::ASSET,
             'amount' => '4695',
             'payTo' => self::PAY_TO,
-        ]]]]]]]];
+        ]]]]]], 'prepared_amount' => 4695]];
+    }
+
+    private function session(int $total = 4695): array
+    {
+        return ['totals' => json_encode([['type' => 'total', 'amount' => $total]])];
     }
 
     private function settle(mixed $instrumentType, mixed $credential): array
@@ -68,6 +73,7 @@ final class PrismHandlerTest extends TestCase
         $this->client->responses['POST /api/v2/payment/settle'] = ['success' => true, 'transaction' => '0x' . str_repeat('cd', 32), 'network' => 'eip155:84532'];
 
         return $this->handler()->settlePayment([
+            'session' => $this->session(),
             'cart' => new Cart(),
             'instrument_type' => $instrumentType,
             'credential' => $credential,
@@ -207,9 +213,12 @@ final class PrismHandlerTest extends TestCase
         $this->client->responses['POST /api/v2/payment/settle'] = ['success' => true, 'transaction' => '0x' . str_repeat('cd', 32), 'network' => 'eip155:84532'];
         $credential = $this->x402Credential();
         $credential['paymentPayload']['payload']['authorization']['value'] = '1500';
+        $cart = new Cart();
+        $cart->total = 15.00;
 
         $result = $this->handler()->settlePayment([
-            'cart' => new Cart(),
+            'session' => $this->session(1500),
+            'cart' => $cart,
             'instrument_type' => 'x402',
             'credential' => $credential,
             'checkout_meta' => $meta,
@@ -345,6 +354,7 @@ final class PrismHandlerTest extends TestCase
         $meta = ['x402' => $this->checkoutMeta()[PrismHandler::NS]];
 
         $result = $this->handler()->settlePayment([
+            'session' => $this->session(),
             'cart' => new Cart(),
             'instrument_type' => null,
             'credential' => $this->x402Credential(),

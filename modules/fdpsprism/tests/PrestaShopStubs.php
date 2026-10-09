@@ -80,9 +80,10 @@ class Cart
     public $id = 77;
     public $id_customer = 5;
     public $id_currency = 1;
+    public float $total = 46.95;
 
     public function getOrderTotal($withTaxes = true, $type = self::BOTH)
     {
-        return 46.95;
+        return $this->total;
     }
 }

@@ -104,6 +104,27 @@ function bqSQL($value): string
 
 class PaymentModule extends Module
 {
+    public $currentOrder = 0;
+    public array $validated = [];
+
+    public function validateOrder(...$args)
+    {
+        $this->validated[] = $args;
+        $this->currentOrder = 1001;
+
+        return true;
+    }
+}
+
+class Customer
+{
+    public $id;
+    public $secure_key = 'secure';
+
+    public function __construct($id = null)
+    {
+        $this->id = $id;
+    }
 }
 
 class Order
@@ -182,6 +203,19 @@ class Validate
 
 class Cart
 {
+    public const ONLY_PRODUCTS = 1;
+    public const BOTH = 3;
+    public const ONLY_SHIPPING = 5;
+
+    public $id = 77;
+    public $id_customer = 5;
+    public $id_currency = 1;
+    public array $orderTotals = [self::ONLY_PRODUCTS => 42.00, self::ONLY_SHIPPING => 4.95, self::BOTH => 46.95];
+
+    public function getOrderTotal($withTaxes = true, $type = self::BOTH)
+    {
+        return $this->orderTotals[$type] ?? 0.0;
+    }
 }
 
 final class FdTestStubs

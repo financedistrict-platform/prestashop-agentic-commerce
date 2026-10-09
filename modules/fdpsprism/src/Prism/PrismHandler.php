@@ -4,7 +4,9 @@ namespace FD\PrismPayment\Prism;
 
 use FD\PrismPayment\Config\ConfigResolver;
 use FD\PrismUcp\Payment\PaymentHandlerInterface;
+use FD\PrismUcp\Payment\PaymentIntegrity;
 use FD\PrismUcp\Payment\VersionedPaymentHandlerInterface;
+use FD\PrismUcp\Ucp\Formatter;
 use FD\PrismUcp\Ucp\RequestContext;
 
 if (!defined('_PS_VERSION_')) {
@@ -238,13 +240,19 @@ final class PrismHandler implements PaymentHandlerInterface, VersionedPaymentHan
         if ($summary === null) {
             return ['success' => false, 'error' => 'Could not extract payment summary from credential'];
         }
-        $accepts = PrismValidator::readStoredAccepts($input['checkout_meta'][$this->id()] ?? $input['checkout_meta'][self::LEGACY_ID] ?? null);
+        $node = $input['checkout_meta'][$this->id()] ?? $input['checkout_meta'][self::LEGACY_ID] ?? null;
+        $accepts = PrismValidator::readStoredAccepts($node);
         if ($accepts === null) {
             return ['success' => false, 'error' => 'No stored payment requirements to validate against'];
         }
         $check = PrismValidator::validate($summary, $accepts);
         if ($check !== true) {
             return ['success' => false, 'error' => $check];
+        }
+        $paidAmount = $node['prepared_amount'] ?? null;
+        $amountError = PaymentIntegrity::settlementError($input['session'] ?? [], $input['cart'], $paidAmount);
+        if ($amountError !== null) {
+            return ['success' => false, 'error' => $amountError];
         }
 
         $result = $this->client()->settle($authorization);
@@ -263,7 +271,7 @@ final class PrismHandler implements PaymentHandlerInterface, VersionedPaymentHan
             ?? $authorization['paymentPayload']['accepted']['network']
             ?? $authorization['paymentPayload']['network'] ?? '');
 
-        return $this->placeOrder($input['cart'], (string) $txRef, $network);
+        return $this->placeOrder($input['cart'], (string) $txRef, $network, Formatter::toMajor($paidAmount));
     }
 
     /**
@@ -284,7 +292,7 @@ final class PrismHandler implements PaymentHandlerInterface, VersionedPaymentHan
     /**
      * @return array<string,mixed>
      */
-    private function placeOrder(\Cart $cart, string $txRef, string $network): array
+    private function placeOrder(\Cart $cart, string $txRef, string $network, float $paidAmount): array
     {
         if (!\Validate::isLoadedObject($cart)) {
             return ['success' => false, 'error' => 'Invalid cart'];
@@ -294,13 +302,11 @@ final class PrismHandler implements PaymentHandlerInterface, VersionedPaymentHan
             return ['success' => false, 'error' => 'Invalid customer'];
         }
 
-        $total = (float) $cart->getOrderTotal(true, \Cart::BOTH);
-
         try {
             $this->module->validateOrder(
                 (int) $cart->id,
                 (int) \Configuration::get('PS_OS_PAYMENT'),
-                $total,
+                $paidAmount,
                 $this->name(),
                 null,
                 ['transaction_id' => $txRef],

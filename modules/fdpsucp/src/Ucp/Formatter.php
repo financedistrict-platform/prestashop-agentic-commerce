@@ -26,6 +26,11 @@ final class Formatter
         return (int) round($amount * 100);
     }
 
+    public static function toMajor(int $minor): float
+    {
+        return $minor / 100;
+    }
+
     public static function profile(string $endpoint, string $storeName, PaymentRegistry $registry, array $supportedVersionsMap = []): array
     {
         return RequestContext::current()->wire()->profile($endpoint, $storeName, $registry, $supportedVersionsMap);

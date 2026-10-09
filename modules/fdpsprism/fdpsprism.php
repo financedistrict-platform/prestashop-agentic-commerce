@@ -48,7 +48,9 @@ class FdPsPrism extends PaymentModule
         if (empty($params['registry'])) {
             return;
         }
-        if (!interface_exists(\FD\PrismUcp\Payment\VersionedPaymentHandlerInterface::class)) {
+        if (!interface_exists(\FD\PrismUcp\Payment\VersionedPaymentHandlerInterface::class)
+            || !class_exists(\FD\PrismUcp\Payment\PaymentIntegrity::class)
+        ) {
             \PrestaShopLogger::addLog('[FD Prism] Finance District UCP ' . self::VERSION . ' or newer is required; Prism handler not registered', 3);
 
             return;
