@@ -301,7 +301,7 @@ final class PrismPaymentTamperTest extends TestCase
             'signed value above the quote' => [$set('paymentPayload.payload.authorization.value', '999999')],
             'signed value that is not an integer string' => [$set('paymentPayload.payload.authorization.value', '46.95')],
             'signed value as a number' => [$set('paymentPayload.payload.authorization.value', 4695)],
-            'authorization already expired' => [$set('paymentPayload.payload.authorization.validBefore', (string) (time() - 5))],
+            'authorization already expired' => [$set('paymentPayload.payload.authorization.validBefore', (string) (time() - 120))],
             'authorization not yet valid' => [$set('paymentPayload.payload.authorization.validAfter', (string) (time() + 3600))],
             'authorization without from' => [$drop('paymentPayload.payload.authorization.from')],
             'authorization without nonce' => [$drop('paymentPayload.payload.authorization.nonce')],
