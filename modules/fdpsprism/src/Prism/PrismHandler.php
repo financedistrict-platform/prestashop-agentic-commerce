@@ -178,7 +178,8 @@ final class PrismHandler implements PaymentHandlerInterface, VersionedPaymentHan
             "Order checkout at $storeName"
         );
 
-        if (!self::isPaymentRequirements($requirements)) {
+        $quote = PrismValidator::parseQuote($requirements);
+        if ($quote === null) {
             \PrestaShopLogger::addLog('[FD Prism] Payment requirements response invalid; Prism entry omitted from checkout', 3);
 
             return null;
@@ -188,7 +189,7 @@ final class PrismHandler implements PaymentHandlerInterface, VersionedPaymentHan
             'ucp' => [self::NS => [[
                 'id' => $declaration['id'],
                 'version' => $declaration['version'],
-                'config' => $requirements,
+                'config' => $quote,
             ]]],
             'prepared_amount' => $total,
             'prepared_resource_url' => $resourceUrl,
@@ -198,15 +199,6 @@ final class PrismHandler implements PaymentHandlerInterface, VersionedPaymentHan
     private function checkoutDeclaration(string $ucpVersion): ?array
     {
         return $this->getUcpDiscoveryHandlersForVersion($ucpVersion)[self::NS][0] ?? null;
-    }
-
-    private static function isPaymentRequirements(mixed $requirements): bool
-    {
-        return is_array($requirements)
-            && isset($requirements['x402Version'])
-            && is_array($requirements['accepts'] ?? null)
-            && $requirements['accepts'] !== []
-            && array_is_list($requirements['accepts']);
     }
 
     /**
@@ -224,27 +216,23 @@ final class PrismHandler implements PaymentHandlerInterface, VersionedPaymentHan
             return ['success' => false, 'error' => 'Payment amount was not verified'];
         }
 
-        $authorization = $this->decodeCredential($input['credential'] ?? null);
-        if ($authorization === null) {
+        $credential = PrismValidator::decode($input['credential'] ?? null);
+        if ($credential === null) {
             return ['success' => false, 'error' => 'Invalid x402 credential format'];
         }
-        if (!$this->hasX402Types($input['instrument_type'] ?? null, $input['credential'], $authorization)) {
+        if (!$this->hasX402Types($input['instrument_type'] ?? null, $input['credential'], $credential)) {
             return ['success' => false, 'error' => 'Prism instrument and credential type must be "x402"'];
         }
 
-        $summary = PrismValidator::extractSignedSummary($authorization);
-        if ($summary === null) {
-            return ['success' => false, 'error' => 'Could not extract payment summary from credential'];
-        }
-        $accepts = PrismValidator::readStoredAccepts($this->storedNode($input['checkout_meta'] ?? null));
-        if ($accepts === null) {
+        $quote = PrismValidator::parseQuote($this->storedQuote($input['checkout_meta'] ?? null));
+        if ($quote === null) {
             return ['success' => false, 'error' => 'No stored payment requirements to validate against'];
         }
-        $check = PrismValidator::validate($summary, $accepts);
-        if ($check !== true) {
-            return ['success' => false, 'error' => $check];
+        $payment = PrismValidator::verify($credential, $quote);
+        if (is_string($payment)) {
+            return ['success' => false, 'error' => $payment];
         }
-        $result = $this->client()->settle($authorization);
+        $result = $this->client()->settle($payment->version, $payment->paymentPayload, $payment->requirements);
         if (!$result) {
             return ['success' => false, 'error' => 'Prism settlement request failed'];
         }
@@ -256,13 +244,27 @@ final class PrismHandler implements PaymentHandlerInterface, VersionedPaymentHan
 
             return ['success' => false, 'error' => $result['error'] ?? $result['errorReason'] ?? $result['reason'] ?? 'Settlement failed'];
         }
-        if (isset($result['network']) && $result['network'] !== $summary['network']) {
-            \PrestaShopLogger::addLog('[FD Prism] Settlement network ' . json_encode($result['network']) . ' differs from the signed network ' . $summary['network'] . '; no order placed for transaction ' . $txRef, 3);
+        if (isset($result['network']) && $result['network'] !== $payment->network) {
+            \PrestaShopLogger::addLog('[FD Prism] Settlement network ' . json_encode($result['network']) . ' differs from the signed network ' . $payment->network . '; no order placed for transaction ' . $txRef, 3);
 
             return ['success' => false, 'error' => 'Settlement network does not match the signed payment'];
         }
 
-        return $this->placeOrder($input['cart'], $txRef, $summary['network'], Formatter::toMajor($paidAmount));
+        return $this->placeOrder($input['cart'], $txRef, $payment->network, Formatter::toMajor($paidAmount));
+    }
+
+    private function storedQuote(?array $checkoutMeta): mixed
+    {
+        $ucp = $this->storedNode($checkoutMeta)['ucp'] ?? null;
+        foreach (is_array($ucp) ? $ucp : [] as $entries) {
+            foreach (is_array($entries) ? $entries : [] as $entry) {
+                if (is_array($entry) && is_array($entry['config'] ?? null)) {
+                    return $entry['config'];
+                }
+            }
+        }
+
+        return null;
     }
 
     public function preparedAmount(?array $checkoutMeta): ?int
@@ -344,37 +346,5 @@ final class PrismHandler implements PaymentHandlerInterface, VersionedPaymentHan
             || in_array($instrumentType, self::LEGACY_INSTRUMENT_TYPES, true);
 
         return $instrumentAccepted && ($credentialType === null || $credentialType === self::INSTRUMENT_TYPE);
-    }
-
-    /**
-     * @param mixed $credential
-     * @return array<string,mixed>|null
-     */
-    private function decodeCredential($credential): ?array
-    {
-        if (is_string($credential)) {
-            $b64 = base64_decode($credential, true);
-            if ($b64 !== false) {
-                $parsed = json_decode($b64, true);
-                if (is_array($parsed)) {
-                    return $parsed;
-                }
-            }
-            $parsed = json_decode($credential, true);
-
-            return is_array($parsed) ? $parsed : null;
-        }
-        if (is_array($credential)) {
-            if (isset($credential['paymentPayload'])) {
-                return $credential;
-            }
-            if (isset($credential['authorization'])) {
-                return $this->decodeCredential($credential['authorization']);
-            }
-
-            return $credential;
-        }
-
-        return null;
     }
 }

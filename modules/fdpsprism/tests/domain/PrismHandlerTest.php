@@ -48,28 +48,14 @@ final class PrismHandlerTest extends TestCase
         return json_decode((string) file_get_contents(dirname(__DIR__, 3) . '/fdpsucp/tests/fixtures/prism/' . $name), true);
     }
 
-    private function x402Credential(): array
+    private function x402Credential(string $amount = '4695'): array
     {
-        return [
-            'type' => 'x402',
-            'x402Version' => 2,
-            'paymentPayload' => [
-                'network' => 'eip155:84532',
-                'accepted' => ['network' => 'eip155:84532', 'asset' => self::ASSET],
-                'payload' => ['authorization' => ['to' => self::PAY_TO, 'value' => '4695']],
-            ],
-            'paymentRequirements' => ['asset' => self::ASSET],
-        ];
+        return FdTestX402::credential($amount);
     }
 
     private function checkoutMeta(): array
     {
-        return [PrismHandler::NS => ['ucp' => [[['config' => ['accepts' => [[
-            'network' => 'eip155:84532',
-            'asset' => self::ASSET,
-            'amount' => '4695',
-            'payTo' => self::PAY_TO,
-        ]]]]]], 'prepared_amount' => 4695]];
+        return [PrismHandler::NS => FdTestX402::checkoutMeta('4695')];
     }
 
     private function session(int $total = 4695): array
@@ -100,7 +86,7 @@ final class PrismHandlerTest extends TestCase
         $client = new FdTestPrismClient();
         $client->fetchUcpHandlers('2026-08-25');
         $client->preparePaymentRequirements('15.00', 'USD', 'https://shop.example/checkout-sessions/1', 'Order');
-        $client->settle(['x402Version' => 2]);
+        $client->settle(2, [], []);
 
         $this->assertSame([
             'GET /ucp/2026-08-25/handlers',
@@ -191,6 +177,20 @@ final class PrismHandlerTest extends TestCase
         $this->assertNotEmpty($logged);
     }
 
+    public function test_only_accepts_that_can_settle_are_offered_to_the_agent(): void
+    {
+        $this->stubPrepare();
+        $requirements = $this->rawRequirements();
+        $solana = ['network' => 'solana:mainnet'] + $requirements['accepts'][0];
+        $upto = ['scheme' => 'upto'] + $requirements['accepts'][0];
+        $requirements['accepts'] = [$solana, $requirements['accepts'][0], $upto];
+        $this->client->responses['POST /api/v2/merchant/payment-requirements'] = $requirements;
+
+        $entry = $this->handler()->getUcpCheckoutHandlers([PrismHandler::NS => $this->prepare()])[PrismHandler::NS][0];
+
+        $this->assertSame($this->rawRequirements()['accepts'], $entry['config']['accepts']);
+    }
+
     public function test_requirements_without_accepts_are_rejected(): void
     {
         $this->stubPrepare();
@@ -240,8 +240,7 @@ final class PrismHandlerTest extends TestCase
         $this->stubPrepare();
         $meta = [PrismHandler::NS => $this->prepare()];
         $this->client->responses['POST /api/v2/payment/settle'] = ['success' => true, 'transaction' => '0x' . str_repeat('cd', 32), 'network' => 'eip155:84532'];
-        $credential = $this->x402Credential();
-        $credential['paymentPayload']['payload']['authorization']['value'] = '1500';
+        $credential = $this->x402Credential('1500');
         $cart = new Cart();
         $cart->total = 15.00;
 
