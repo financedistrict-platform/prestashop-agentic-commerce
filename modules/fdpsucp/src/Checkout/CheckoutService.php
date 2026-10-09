@@ -49,26 +49,14 @@ final class CheckoutService
     /** @param array<string,mixed> $body */
     public function create(array $body, ?string $idempotencyKey): Response
     {
-        // Idempotency (NFR-3, QA): a retried create with the same key returns the
-        // original session instead of inserting a duplicate. The one-time session
-        // secret is re-issued — the first response may not have reached the agent
-        // (that's why they retried). Scoped to the same agent fingerprint so one
-        // agent's key can never resurface another agent's session.
         if ($idempotencyKey) {
-            $prior = $this->sessions->findByIdempotencyKey($idempotencyKey, $this->idShop());
-            if ($prior && ($prior['agent_fingerprint'] ?? '') === $this->agentFingerprint) {
+            $prior = $this->priorSessionForKey($idempotencyKey);
+            if ($prior) {
                 if ($pinError = $this->pinError($prior)) {
                     return $pinError;
                 }
-                $secret = bin2hex(random_bytes(32));
-                $this->sessions->update($prior['session_uid'], $this->idShop(), [
-                    'session_secret_hash' => hash('sha256', $secret),
-                    'updated_at' => date('Y-m-d H:i:s'),
-                ]);
-                $prior = $this->sessions->findByUid($prior['session_uid'], $this->idShop());
-                $out = Formatter::checkoutSession($prior, $this->registry);
-                $out['session_secret'] = $secret;
-                return Response::json(200, $out);
+
+                return Response::json(200, Formatter::checkoutSession($prior, $this->registry));
             }
         }
 
@@ -153,7 +141,7 @@ final class CheckoutService
             'buyer' => $buyer ? json_encode($buyer) : null,
             'fulfillment' => $fulfillment ? json_encode($fulfillment) : null,
             'agent_fingerprint' => $this->agentFingerprint,
-            'session_secret_hash' => hash('sha256', $secret),
+            'session_secret_hash' => CapabilitySecret::digest($secret),
             'idempotency_key' => $idempotencyKey,
             'ucp_version' => RequestContext::current()->sessionPin(),
             'created_at' => $now,
@@ -329,11 +317,12 @@ final class CheckoutService
     /** @param array<string,mixed> $body */
     public function complete(string $uid, array $body, ?string $idempotencyKey): Response
     {
-        // Idempotency: replay a prior completion (NFR-3). Only the owner of the
-        // prior session (capability-secret holder) may replay it.
         if ($idempotencyKey) {
-            $prior = $this->sessions->findByIdempotencyKey($idempotencyKey, $this->idShop());
-            if ($prior && $this->ownsSession($prior) && $prior['status'] === 'completed' && !empty($prior['id_order'])) {
+            $prior = $this->priorSessionForKey($idempotencyKey);
+            if ($prior && ($prior['session_uid'] ?? '') !== $uid) {
+                return UcpError::response('idempotency_key_reused', 'This idempotency key is already bound to a different checkout session', 409);
+            }
+            if ($prior && $prior['status'] === 'completed' && !empty($prior['id_order'])) {
                 if ($pinError = $this->pinError($prior)) {
                     return $pinError;
                 }
@@ -488,6 +477,20 @@ final class CheckoutService
         return null;
     }
 
+    /**
+     * @return array<string,mixed>|null
+     */
+    private function priorSessionForKey(string $idempotencyKey): ?array
+    {
+        foreach ($this->sessions->findByIdempotencyKey($idempotencyKey, $this->idShop()) as $candidate) {
+            if (CapabilitySecret::holds((string) ($candidate['session_secret_hash'] ?? ''), $this->sessionSecret)) {
+                return $candidate;
+            }
+        }
+
+        return null;
+    }
+
     private function pinError(array $session): ?\FD\PrismUcp\Http\Response
     {
         return $this->pin?->check($session['ucp_version'] ?? null);
@@ -632,20 +635,6 @@ final class CheckoutService
             $buyer['last_name'] = (string) $raw['last_name'];
         }
         return $buyer === [] ? null : $buyer;
-    }
-
-    /**
-     * A session is owned by whoever presents the capability secret minted at
-     * creation. The secret is never echoed back after create, so it can't be
-     * lifted from a later response or a spoofable header (unlike the old
-     * agent-fingerprint check). Sessions created before 0.5.0 have no stored
-     * hash and remain accessible (legacy compatibility).
-     *
-     * @param array<string,mixed> $session
-     */
-    private function ownsSession(array $session): bool
-    {
-        return CapabilitySecret::authorizes((string) ($session['session_secret_hash'] ?? ''), $this->sessionSecret);
     }
 
     /**

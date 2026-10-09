@@ -24,6 +24,11 @@ final class CapabilitySecret
     /** A secret was supplied but does not match — a real ownership violation. */
     public const MISMATCH = 'mismatch';
 
+    public static function digest(string $secret): string
+    {
+        return hash('sha256', $secret);
+    }
+
     /**
      * @return self::OK|self::MISSING|self::MISMATCH
      */
@@ -36,7 +41,12 @@ final class CapabilitySecret
             return self::MISSING;
         }
 
-        return hash_equals($storedHash, hash('sha256', $providedSecret)) ? self::OK : self::MISMATCH;
+        return hash_equals($storedHash, self::digest($providedSecret)) ? self::OK : self::MISMATCH;
+    }
+
+    public static function holds(string $storedHash, string $providedSecret): bool
+    {
+        return $storedHash !== '' && $providedSecret !== '' && hash_equals($storedHash, self::digest($providedSecret));
     }
 
     /** Convenience boolean: is the caller allowed to proceed? */

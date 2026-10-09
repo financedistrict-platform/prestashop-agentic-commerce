@@ -65,7 +65,7 @@ final class CartService
             'id_shop' => $this->idShop(),
             'line_items' => json_encode($formatted),
             'agent_fingerprint' => $this->agentFingerprint,
-            'cart_secret_hash' => hash('sha256', $secret),
+            'cart_secret_hash' => CapabilitySecret::digest($secret),
             'ucp_version' => RequestContext::current()->sessionPin(),
             'created_at' => $now,
             'updated_at' => $now,
