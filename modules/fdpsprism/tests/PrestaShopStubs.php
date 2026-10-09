@@ -80,10 +80,27 @@ class Cart
     public $id = 77;
     public $id_customer = 5;
     public $id_currency = 1;
+    public $id_address_delivery = 9;
     public float $total = 46.95;
+    public array $deliveryOption = [9 => '7,'];
 
     public function getOrderTotal($withTaxes = true, $type = self::BOTH)
     {
         return $this->total;
     }
+
+    public function getDeliveryOptionList()
+    {
+        return [9 => ['7,' => []]];
+    }
+
+    public function getDeliveryOption($defaultCountry = null, $dontAutoSelectOptions = false, $useCache = true)
+    {
+        return $this->deliveryOption;
+    }
+}
+
+final class FdTestShipping
+{
+    public const FULFILLMENT = '{"methods":[{"groups":[{"selected_option_id":"7"}]}]}';
 }

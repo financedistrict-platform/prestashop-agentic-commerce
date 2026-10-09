@@ -398,11 +398,16 @@ final class CheckoutService
 
         try {
             $cart = $this->cartBuilder->build($session, $this->context);
-            $this->cartBuilder->selectSessionCarrier($cart, json_decode($session['fulfillment'] ?? 'null', true));
         } catch (\Throwable $e) {
             $this->sessions->update($uid, $this->idShop(), ['status' => 'incomplete']);
             \PrestaShopLogger::addLog('[FD UCP] Cart build failed: ' . $e->getMessage(), 3);
             return UcpError::response('cart_build_failed', 'Could not build the cart for this session', 422);
+        }
+
+        $carrierError = Fulfillment::selectionError($cart, $session);
+        if ($carrierError !== null) {
+            $this->sessions->update($uid, $this->idShop(), ['status' => 'incomplete']);
+            return UcpError::response('carrier_unavailable', $carrierError, 422);
         }
 
         $lines = $this->cartBuilder->priceLines($cart, json_decode($session['line_items'] ?? '[]', true) ?: []);
@@ -509,12 +514,11 @@ final class CheckoutService
             return [self::totalsList($subtotal, 0, $subtotal), null, $formatted];
         }
 
-        $selected = $this->cartBuilder->selectSessionCarrier($cart, $inputFulfillment);
         $priced = $this->cartBuilder->priceLines($cart, $formatted);
         if ($priced === null) {
             return null;
         }
-        $fulfillment = Fulfillment::fromCart($cart, $dest, array_column($priced, 'id'), $selected);
+        $fulfillment = Fulfillment::fromCart($cart, $dest, array_column($priced, 'id'), Fulfillment::appliedOptionId($cart));
 
         return [$this->cartTotals($cart), $fulfillment, $priced];
     }
