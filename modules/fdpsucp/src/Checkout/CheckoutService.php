@@ -133,8 +133,8 @@ final class CheckoutService
         ];
 
         $priced = $this->priceAndFulfill($provisional, $formatted, $inputFulfillment);
-        if ($priced === null) {
-            return self::cartMismatch();
+        if ($priced instanceof Response) {
+            return $priced;
         }
         [$totals, $fulfillment, $formatted] = $priced;
 
@@ -269,8 +269,8 @@ final class CheckoutService
             'fulfillment' => $fulfillmentInput,
         ];
         $priced = $this->priceAndFulfill($provisional, $formatted, $fulfillmentInput);
-        if ($priced === null) {
-            return self::cartMismatch();
+        if ($priced instanceof Response) {
+            return $priced;
         }
         [$totals, $fulfillment, $formatted] = $priced;
 
@@ -500,22 +500,27 @@ final class CheckoutService
      * @param array<string,mixed> $provisional
      * @param array<int,array<string,mixed>> $formatted
      * @param array<string,mixed>|null $inputFulfillment
-     * @return array{0:array<int,array<string,mixed>>,1:array<string,mixed>|null,2:array<int,array<string,mixed>>}|null
+     * @return array{0:array<int,array<string,mixed>>,1:array<string,mixed>|null,2:array<int,array<string,mixed>>}|Response
      */
-    private function priceAndFulfill(array $provisional, array $formatted, ?array $inputFulfillment): ?array
+    private function priceAndFulfill(array $provisional, array $formatted, ?array $inputFulfillment): array|Response
     {
         $cart = $this->cartBuilder->build($provisional, $this->context);
 
         $dest = $inputFulfillment['methods'][0]['destinations'][0] ?? null;
-        if (!is_array($dest) || empty($dest['address_country']) || (int) $cart->id_address_delivery <= 0) {
+        if (!is_array($dest) || empty($dest['address_country'])) {
             $subtotal = array_sum(array_map(fn (array $li): int => $this->totalOf($li['totals'] ?? []), $formatted));
 
             return [self::totalsList($subtotal, 0, $subtotal), null, $formatted];
         }
 
+        $coverageError = Fulfillment::coverageError($cart);
+        if ($coverageError !== null) {
+            return UcpError::response('carrier_unavailable', $coverageError, 422);
+        }
+
         $priced = $this->cartBuilder->priceLines($cart, $formatted);
         if ($priced === null) {
-            return null;
+            return self::cartMismatch();
         }
         $fulfillment = Fulfillment::fromCart($cart, $dest, array_column($priced, 'id'), Fulfillment::appliedOptionId($cart));
 

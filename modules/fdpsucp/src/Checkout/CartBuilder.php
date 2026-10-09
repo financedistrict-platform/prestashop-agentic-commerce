@@ -187,7 +187,7 @@ class CartBuilder
         }
 
         $ps = UcpAddress::ucpToPs($dest);
-        $idCountry = (int) \Country::getByIso($ps['country']);
+        $idCountry = $this->deliveryCountryId($ps['country'], $idShop);
         if ($idCountry === 0) {
             return null;
         }
@@ -205,16 +205,38 @@ class CartBuilder
         $address->city = $ps['city'] ?: 'N/A';
         $address->postcode = $ps['postcode'];
 
-        if ($ps['state'] !== '') {
-            $idState = (int) \State::getIdByName($ps['state']);
-            if ($idState > 0) {
-                $address->id_state = $idState;
-            }
+        $idState = $this->deliveryStateId($ps['state'], $idCountry);
+        if ($idState > 0) {
+            $address->id_state = $idState;
         }
 
         $address->add();
 
         return $address;
+    }
+
+    public function deliveryCountryId(string $iso, int $idShop): int
+    {
+        if (!\Validate::isLanguageIsoCode($iso)) {
+            return 0;
+        }
+        $idCountry = (int) \Country::getByIso($iso, true);
+
+        return $idCountry > 0 && (new \Country($idCountry))->isAssociatedToShop($idShop) ? $idCountry : 0;
+    }
+
+    public function deliveryStateId(string $state, int $idCountry): int
+    {
+        if ($state === '') {
+            return 0;
+        }
+        $idState = (int) \State::getIdByIso($state, $idCountry);
+        if ($idState > 0) {
+            return $idState;
+        }
+        $idState = (int) \State::getIdByName($state);
+
+        return $idState > 0 && (int) (new \State($idState))->id_country === $idCountry ? $idState : 0;
     }
 
     private function toMinor(float $amount): int

@@ -163,6 +163,74 @@ class Currency
     }
 }
 
+class Country
+{
+    public static array $ids = ['FR' => 8, 'SE' => 18, 'KP' => 113];
+    public static array $inactive = [];
+    public static array $unassociated = [];
+
+    public $id;
+
+    public function __construct($id = null)
+    {
+        $this->id = $id;
+    }
+
+    public static function getByIso($isoCode, $active = false)
+    {
+        if (!preg_match('/^[a-zA-Z]{2,3}$/', (string) $isoCode)) {
+            throw new RuntimeException('Given iso code is not valid.');
+        }
+        $id = self::$ids[strtoupper((string) $isoCode)] ?? 0;
+
+        return $active && in_array($id, self::$inactive, true) ? 0 : $id;
+    }
+
+    public function isAssociatedToShop($idShop = null)
+    {
+        return !in_array([(int) $this->id, (int) $idShop], self::$unassociated, true);
+    }
+}
+
+class State
+{
+    public static array $states = [
+        5 => ['iso' => 'CA', 'name' => 'California', 'id_country' => 21],
+        60 => ['iso' => 'AB', 'name' => 'Stockholm', 'id_country' => 18],
+    ];
+
+    public $id;
+    public $id_country = 0;
+
+    public function __construct($id = null)
+    {
+        $this->id = $id;
+        $this->id_country = self::$states[(int) $id]['id_country'] ?? 0;
+    }
+
+    public static function getIdByIso($isoCode, $idCountry = null)
+    {
+        foreach (self::$states as $id => $state) {
+            if ($state['iso'] === $isoCode && (!$idCountry || $state['id_country'] === (int) $idCountry)) {
+                return $id;
+            }
+        }
+
+        return 0;
+    }
+
+    public static function getIdByName($name)
+    {
+        foreach (self::$states as $id => $state) {
+            if ($state['name'] === $name) {
+                return $id;
+            }
+        }
+
+        return false;
+    }
+}
+
 class Shop
 {
     public $id = 1;
@@ -228,6 +296,11 @@ class Validate
     {
         return is_object($object) && !empty($object->id);
     }
+
+    public static function isLanguageIsoCode($isoCode)
+    {
+        return preg_match('/^[a-zA-Z]{2,3}$/', (string) $isoCode);
+    }
 }
 
 class Cart
@@ -250,6 +323,12 @@ class Cart
     public array $deliveryOptionList = [];
     public bool $saves = true;
     public array $carrierTotals = [];
+    public bool $virtual = false;
+
+    public function isVirtualCart()
+    {
+        return $this->virtual;
+    }
 
     public function getOrderTotal($withTaxes = true, $type = self::BOTH)
     {
@@ -310,6 +389,8 @@ final class FdTestStubs
         Product::$prices = [];
         Currency::$deleted = [];
         Currency::$inactive = [];
+        Country::$inactive = [];
+        Country::$unassociated = [];
         Context::$instance = null;
         PrestaShopLogger::$logs = [];
         \FD\PrismUcp\Ucp\RequestContext::set(null);

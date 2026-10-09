@@ -94,6 +94,11 @@ class Cart
         return [9 => ['7,' => []]];
     }
 
+    public function isVirtualCart()
+    {
+        return false;
+    }
+
     public function getDeliveryOption($defaultCountry = null, $dontAutoSelectOptions = false, $useCache = true)
     {
         return $this->deliveryOption;
