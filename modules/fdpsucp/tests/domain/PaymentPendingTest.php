@@ -182,15 +182,95 @@ final class PaymentPendingTest extends TestCase
         $this->assertCount(1, $this->handler->settled);
     }
 
-    public function test_definite_rejection_on_retry_releases_the_session_for_a_fresh_credential(): void
+    public function test_any_non_pending_failure_on_a_resumed_session_is_escalated_never_released(): void
     {
         $this->pendingSession();
-        $this->handler->script = [['success' => false, 'error' => 'Settlement failed']];
+        $this->handler->script = [['success' => false, 'error' => 'Payment authorization has expired']];
 
         $response = $this->complete();
 
-        $this->assertSame(422, $response->status);
-        $this->assertSame('incomplete', $this->row()['status']);
+        $this->assertSame(409, $response->status, (string) json_encode($response->body));
+        $this->assertSame('payment_requires_review', $response->body['messages'][0]['code']);
+        $this->assertSame('requires_escalation', $this->row()['status']);
+        $this->assertSame(409, $this->complete(['type' => 'x402', 'authorization' => ['nonce' => '0xdd', 'from' => '0xbb']])->status);
+    }
+
+    public function test_only_the_resumed_attempt_tells_the_handler_to_skip_the_expiry_check(): void
+    {
+        $this->pendingSession();
+        $this->handler->script = [self::SETTLED];
+
+        $this->complete();
+
+        $this->assertArrayNotHasKey('resumed', $this->handler->settled[0]);
+        $this->assertTrue($this->handler->settled[1]['resumed'] ?? false);
+    }
+
+    public function test_credential_digest_is_stored_before_the_settle_call(): void
+    {
+        $seen = null;
+        $this->handler->onSettle = function () use (&$seen): void {
+            $seen = [$this->row()['status'], json_decode($this->row()['payment_meta'], true)['pending_credential_sha256'] ?? null];
+        };
+        $this->handler->script = [self::SETTLED];
+
+        $this->complete();
+
+        $this->assertSame('complete_in_progress', $seen[0]);
+        $this->assertMatchesRegularExpression('/^[0-9a-f]{64}$/', (string) $seen[1]);
+    }
+
+    private function abandonedClaim(int $ageSeconds, bool $withDigest = true): void
+    {
+        $this->handler->script = [self::SETTLED];
+        $digest = hash('sha256', (string) json_encode(['authorization' => ['from' => '0xbb', 'nonce' => '0xaa'], 'type' => 'x402']));
+        $meta = ['xyz.fd.prism_payment' => ['prepared_amount' => 4695]] + ($withDigest ? ['pending_credential_sha256' => $digest] : []);
+        $this->sessions->rows[self::SESSION_ID]['status'] = 'complete_in_progress';
+        $this->sessions->rows[self::SESSION_ID]['payment_meta'] = json_encode($meta);
+        $this->sessions->rows[self::SESSION_ID]['updated_at'] = date('Y-m-d H:i:s', time() - $ageSeconds);
+    }
+
+    public function test_abandoned_claim_resumes_with_the_same_credential(): void
+    {
+        $this->abandonedClaim(120);
+
+        $response = $this->complete();
+
+        $this->assertSame(200, $response->status, (string) json_encode($response->body));
+        $this->assertSame('completed', $this->row()['status']);
+        $this->assertTrue($this->handler->settled[0]['resumed'] ?? false);
+    }
+
+    public function test_abandoned_claim_refuses_a_different_credential(): void
+    {
+        $this->abandonedClaim(120);
+
+        $response = $this->complete(['type' => 'x402', 'authorization' => ['nonce' => '0xdd', 'from' => '0xbb']]);
+
+        $this->assertSame(409, $response->status);
+        $this->assertSame('payment_pending_mismatch', $response->body['messages'][0]['code']);
+        $this->assertSame([], $this->handler->settled);
+    }
+
+    public function test_recent_claim_is_still_in_progress(): void
+    {
+        $this->abandonedClaim(5);
+
+        $response = $this->complete();
+
+        $this->assertSame(409, $response->status);
+        $this->assertSame('session_in_progress', $response->body['messages'][0]['code']);
+        $this->assertSame([], $this->handler->settled);
+    }
+
+    public function test_abandoned_claim_that_never_reached_settlement_is_a_fresh_attempt(): void
+    {
+        $this->abandonedClaim(120, false);
+
+        $response = $this->complete(['type' => 'x402', 'authorization' => ['nonce' => '0xdd', 'from' => '0xbb']]);
+
+        $this->assertSame(200, $response->status, (string) json_encode($response->body));
+        $this->assertArrayNotHasKey('resumed', $this->handler->settled[0]);
     }
 
     public function test_definite_rejection_still_fails_the_session(): void
@@ -241,6 +321,7 @@ final class FdTestScriptedPrismHandler implements PaymentHandlerInterface
 {
     public array $script = [];
     public array $settled = [];
+    public ?Closure $onSettle = null;
 
     public function id(): string
     {
@@ -272,6 +353,9 @@ final class FdTestScriptedPrismHandler implements PaymentHandlerInterface
     public function settlePayment(array $input): array
     {
         $this->settled[] = $input;
+        if ($this->onSettle !== null) {
+            ($this->onSettle)();
+        }
         $next = array_shift($this->script);
         if ($next instanceof Throwable) {
             throw $next;

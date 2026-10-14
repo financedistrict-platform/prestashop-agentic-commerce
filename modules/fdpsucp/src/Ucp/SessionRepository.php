@@ -12,6 +12,8 @@ if (!defined('_PS_VERSION_')) {
  */
 class SessionRepository
 {
+    public const CLAIM_STALE_AFTER = 60;
+
     private string $table;
 
     public function __construct()
@@ -74,9 +76,10 @@ class SessionRepository
     }
 
     /**
-     * Atomically claim a session for completion: flip incomplete or
-     * payment_pending -> complete_in_progress. Returns true if THIS call won
-     * the claim (NFR-2, once-only settlement).
+     * Atomically claim a session for completion: flip incomplete,
+     * payment_pending or an abandoned complete_in_progress (older than
+     * CLAIM_STALE_AFTER) -> complete_in_progress. Returns true if THIS call
+     * won the claim (NFR-2, once-only settlement).
      */
     public function claimForCompletion(string $uid, int $idShop): bool
     {
@@ -84,9 +87,20 @@ class SessionRepository
                 SET `status` = "complete_in_progress", `updated_at` = "' . pSQL(date('Y-m-d H:i:s')) . '"
                 WHERE `session_uid` = "' . pSQL($uid) . '"
                 AND `id_shop` = ' . (int) $idShop . '
-                AND `status` IN ("incomplete", "payment_pending")';
+                AND (`status` IN ("incomplete", "payment_pending")
+                    OR (`status` = "complete_in_progress" AND `updated_at` <= "' . pSQL(date('Y-m-d H:i:s', time() - self::CLAIM_STALE_AFTER)) . '"))';
         \Db::getInstance()->execute($sql);
         return \Db::getInstance()->Affected_Rows() === 1;
+    }
+
+    /** @param array<string,mixed> $session */
+    public static function claimAbandoned(array $session): bool
+    {
+        $updatedAt = strtotime((string) ($session['updated_at'] ?? ''));
+
+        return ($session['status'] ?? '') === 'complete_in_progress'
+            && $updatedAt !== false
+            && $updatedAt <= time() - self::CLAIM_STALE_AFTER;
     }
 
     /**

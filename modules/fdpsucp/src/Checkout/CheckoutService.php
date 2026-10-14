@@ -318,7 +318,8 @@ final class CheckoutService
         }
 
         $credentialDigest = self::credentialDigest($instrument['credential']);
-        $resumed = $session['status'] === 'payment_pending';
+        $resumed = self::pendingDigest($session) !== ''
+            && ($session['status'] === 'payment_pending' || SessionRepository::claimAbandoned($session));
         if ($resumed && !hash_equals(self::pendingDigest($session), $credentialDigest)) {
             return UcpError::response(
                 'payment_pending_mismatch',
@@ -384,6 +385,10 @@ final class CheckoutService
             }
         }
 
+        $this->sessions->update($uid, $this->idShop(), [
+            'payment_meta' => json_encode([self::PENDING_DIGEST_KEY => $credentialDigest] + (json_decode($session['payment_meta'] ?? '{}', true) ?: [])),
+        ]);
+
         try {
             $result = $this->registry->settle($handlerId, [
                 'session' => $session,
@@ -392,7 +397,7 @@ final class CheckoutService
                 'instrument_type' => $instrument['type'] ?? null,
                 'credential' => $instrument['credential'],
                 'checkout_meta' => json_decode($session['payment_meta'] ?? 'null', true),
-            ]);
+            ] + ($resumed ? ['resumed' => true] : []));
         } catch (\Throwable $e) {
             \PrestaShopLogger::addLog('[FD UCP] Settlement outcome unknown: ' . $e->getMessage(), 3);
 
@@ -405,9 +410,14 @@ final class CheckoutService
         if (empty($result['success']) && !empty($result['pending'])) {
             return $this->holdForConfirmation($uid, $session, $credentialDigest);
         }
+        if (empty($result['success']) && $resumed) {
+            return $this->escalate($uid, $session, (string) ($result['error'] ?? 'settlement_unresolved'));
+        }
 
         if (empty($result['success']) || empty($result['id_order'])) {
-            $this->sessions->update($uid, $this->idShop(), ['status' => 'incomplete']);
+            $released = json_decode($session['payment_meta'] ?? '{}', true) ?: [];
+            unset($released[self::PENDING_DIGEST_KEY]);
+            $this->sessions->update($uid, $this->idShop(), ['status' => 'incomplete', 'payment_meta' => json_encode($released)]);
             return UcpError::response('payment_failed', $result['error'] ?? 'Payment settlement failed', 422);
         }
 

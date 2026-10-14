@@ -240,7 +240,7 @@ final class PrismHandler implements PaymentHandlerInterface, VersionedPaymentHan
         if ($quote === null) {
             return ['success' => false, 'error' => 'No stored payment requirements to validate against'];
         }
-        $payment = PrismValidator::verify($credential, $quote);
+        $payment = PrismValidator::verify($credential, $quote, ($input['resumed'] ?? false) === true);
         if (is_string($payment)) {
             return ['success' => false, 'error' => $payment];
         }

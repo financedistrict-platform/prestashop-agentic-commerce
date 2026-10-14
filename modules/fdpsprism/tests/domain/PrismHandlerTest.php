@@ -479,6 +479,45 @@ final class PrismHandlerTest extends TestCase
         $this->assertArrayNotHasKey('review', $result);
     }
 
+    private function expiredCredential(): array
+    {
+        $credential = $this->x402Credential();
+        $credential['paymentPayload']['payload']['authorization']['validBefore'] = (string) (time() - 3600);
+
+        return $credential;
+    }
+
+    public function test_resumed_settlement_of_an_expired_authorization_still_reaches_the_gateway(): void
+    {
+        $this->client->responses['POST /api/v2/payment/settle'] = ['success' => false, 'transaction' => '', 'errorReason' => 'settlement_unresolved'];
+
+        $result = $this->settleThroughCore([
+            'session' => $this->session(),
+            'cart' => new Cart(),
+            'instrument_type' => 'x402',
+            'credential' => $this->expiredCredential(),
+            'checkout_meta' => $this->checkoutMeta(),
+            'resumed' => true,
+        ]);
+
+        $this->assertSame(['POST /api/v2/payment/settle'], $this->client->paths);
+        $this->assertTrue($result['review'] ?? false);
+    }
+
+    public function test_first_settlement_of_an_expired_authorization_never_reaches_the_gateway(): void
+    {
+        $result = $this->settleThroughCore([
+            'session' => $this->session(),
+            'cart' => new Cart(),
+            'instrument_type' => 'x402',
+            'credential' => $this->expiredCredential(),
+            'checkout_meta' => $this->checkoutMeta(),
+        ]);
+
+        $this->assertFalse($result['success']);
+        $this->assertSame([], $this->client->paths);
+    }
+
     public function test_retry_of_a_settled_payment_places_the_order_once(): void
     {
         $this->assertTrue($this->settleWithGateway(null)['pending']);

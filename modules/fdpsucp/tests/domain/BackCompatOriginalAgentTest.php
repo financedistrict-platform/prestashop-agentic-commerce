@@ -248,10 +248,14 @@ final class FdTestMemorySessions extends SessionRepository
 
     public function claimForCompletion(string $uid, int $idShop): bool
     {
-        if (!in_array($this->rows[$uid]['status'] ?? '', ['incomplete', 'payment_pending'], true)) {
+        $row = $this->rows[$uid] ?? [];
+        $status = $row['status'] ?? '';
+        $stale = $status === 'complete_in_progress' && strtotime((string) ($row['updated_at'] ?? '')) <= time() - 60;
+        if (!$stale && !in_array($status, ['incomplete', 'payment_pending'], true)) {
             return false;
         }
         $this->rows[$uid]['status'] = 'complete_in_progress';
+        $this->rows[$uid]['updated_at'] = date('Y-m-d H:i:s');
 
         return true;
     }
