@@ -21,6 +21,12 @@ final class UcpStatus
         if (($session['status'] ?? '') === 'completed') {
             return 'completed';
         }
+        if (($session['status'] ?? '') === 'requires_escalation') {
+            return 'requires_escalation';
+        }
+        if (($session['status'] ?? '') === 'payment_pending') {
+            return 'complete_in_progress';
+        }
         return self::missingRequirements($session) === [] ? 'ready_for_complete' : 'incomplete';
     }
 

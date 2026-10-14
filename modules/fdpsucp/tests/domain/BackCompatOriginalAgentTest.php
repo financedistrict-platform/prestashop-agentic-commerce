@@ -112,12 +112,12 @@ final class BackCompatOriginalAgentTest extends TestCase
         $this->assertSame('payment.instruments[0].handler_id and credential are required', $response->body['messages'][0]['content']);
     }
 
-    public function test_throwing_handler_releases_the_session(): void
+    public function test_throwing_handler_holds_the_session_for_a_retry_with_the_same_credential(): void
     {
         $response = $this->complete(['handler_id' => 'x402', 'credential' => ['a' => 1]], new FdTestRecordingPrismHandler(true));
 
-        $this->assertSame(422, $response->status);
-        $this->assertSame('incomplete', $this->sessions->rows[self::SESSION_ID]['status']);
+        $this->assertSame(202, $response->status);
+        $this->assertSame('payment_pending', $this->sessions->rows[self::SESSION_ID]['status']);
     }
 
     public function test_session_pinned_to_another_version_rejects_a_matched_different_agent(): void
@@ -248,7 +248,7 @@ final class FdTestMemorySessions extends SessionRepository
 
     public function claimForCompletion(string $uid, int $idShop): bool
     {
-        if (($this->rows[$uid]['status'] ?? '') !== 'incomplete') {
+        if (!in_array($this->rows[$uid]['status'] ?? '', ['incomplete', 'payment_pending'], true)) {
             return false;
         }
         $this->rows[$uid]['status'] = 'complete_in_progress';

@@ -24,6 +24,8 @@ if (!defined('_PS_VERSION_')) {
  */
 final class CheckoutService
 {
+    private const PENDING_DIGEST_KEY = 'pending_credential_sha256';
+
     private SessionRepository $sessions;
     private CartBuilder $cartBuilder;
 
@@ -157,7 +159,7 @@ final class CheckoutService
         if ($authError = $this->sessionAuthError($session)) {
             return $authError;
         }
-        if (in_array($session['status'], ['canceled', 'completed', 'complete_in_progress'], true)) {
+        if (in_array($session['status'], ['canceled', 'completed', 'complete_in_progress', 'payment_pending', 'requires_escalation'], true)) {
             return UcpError::response('session_' . $session['status'], 'Session is ' . $session['status'], 409);
         }
 
@@ -244,6 +246,9 @@ final class CheckoutService
         if ($session['status'] === 'completed') {
             return UcpError::response('session_completed', 'Cannot cancel a completed session', 409);
         }
+        if (in_array($session['status'], ['payment_pending', 'requires_escalation'], true)) {
+            return UcpError::response('session_' . $session['status'], 'Session is ' . $session['status'], 409);
+        }
 
         $this->sessions->update($uid, $this->idShop(), [
             'status' => 'canceled',
@@ -284,7 +289,7 @@ final class CheckoutService
         if ($authError = $this->sessionAuthError($session)) {
             return $authError;
         }
-        if (in_array($session['status'], ['canceled', 'completed'], true)) {
+        if (in_array($session['status'], ['canceled', 'completed', 'requires_escalation'], true)) {
             return UcpError::response('session_' . $session['status'], 'Session is ' . $session['status'], 409);
         }
 
@@ -312,40 +317,63 @@ final class CheckoutService
             return UcpError::response('unknown_handler', "Unknown payment handler: $handlerId", 422);
         }
 
+        $credentialDigest = self::credentialDigest($instrument['credential']);
+        $resumed = $session['status'] === 'payment_pending';
+        if ($resumed && !hash_equals(self::pendingDigest($session), $credentialDigest)) {
+            return UcpError::response(
+                'payment_pending_mismatch',
+                'A payment for this session is still being confirmed. Retry with the same credential.',
+                409
+            );
+        }
+        $restoreStatus = $resumed ? 'payment_pending' : 'incomplete';
+
         // Atomic, once-only claim (NFR-2).
         if (!$this->sessions->claimForCompletion($uid, $this->idShop())) {
             return UcpError::response('session_in_progress', 'Session is already being completed', 409);
+        }
+        if ($resumed) {
+            $this->sessions->update($uid, $this->idShop(), ['expires_at' => PaymentIntegrity::quoteExpiry()]);
         }
         $session = $this->sessions->findByUid($uid, $this->idShop()) ?? $session;
 
         try {
             $this->cartBuilder->pinCurrency($session, $this->context);
         } catch (\UnexpectedValueException $e) {
-            $this->sessions->update($uid, $this->idShop(), ['status' => 'incomplete']);
+            $this->sessions->update($uid, $this->idShop(), ['status' => $restoreStatus]);
             return UcpError::response('invalid_currency', $e->getMessage(), 422);
         }
 
         try {
             $cart = $this->cartBuilder->build($session, $this->context);
         } catch (\Throwable $e) {
-            $this->sessions->update($uid, $this->idShop(), ['status' => 'incomplete']);
+            $this->sessions->update($uid, $this->idShop(), ['status' => $restoreStatus]);
             \PrestaShopLogger::addLog('[FD UCP] Cart build failed: ' . $e->getMessage(), 3);
             return UcpError::response('cart_build_failed', 'Could not build the cart for this session', 422);
         }
 
         $carrierError = Fulfillment::selectionError($cart, $session);
         if ($carrierError !== null) {
-            $this->sessions->update($uid, $this->idShop(), ['status' => 'incomplete']);
+            $this->sessions->update($uid, $this->idShop(), ['status' => $restoreStatus]);
             return UcpError::response('carrier_unavailable', $carrierError, 422);
         }
 
         $lines = $this->cartBuilder->priceLines($cart, json_decode($session['line_items'] ?? '[]', true) ?: []);
         if ($lines === null) {
-            $this->sessions->update($uid, $this->idShop(), ['status' => 'incomplete']);
+            $this->sessions->update($uid, $this->idShop(), ['status' => $restoreStatus]);
             return self::cartMismatch();
         }
 
         if (PaymentIntegrity::quoteError($session, $cart) !== null) {
+            if ($resumed) {
+                $this->sessions->update($uid, $this->idShop(), ['status' => $restoreStatus]);
+
+                return UcpError::response(
+                    'quote_changed',
+                    'The order total no longer matches the quote while a payment is still being confirmed. Retry later with the same credential.',
+                    409
+                );
+            }
             try {
                 return $this->requote($uid, $session, $cart, $lines, PaymentIntegrity::quoteExpired($session));
             } catch (\Throwable $e) {
@@ -366,10 +394,16 @@ final class CheckoutService
                 'checkout_meta' => json_decode($session['payment_meta'] ?? 'null', true),
             ]);
         } catch (\Throwable $e) {
-            $this->sessions->update($uid, $this->idShop(), ['status' => 'incomplete']);
-            \PrestaShopLogger::addLog('[FD UCP] Settlement failed: ' . $e->getMessage(), 3);
+            \PrestaShopLogger::addLog('[FD UCP] Settlement outcome unknown: ' . $e->getMessage(), 3);
 
-            return UcpError::response('payment_failed', 'Payment settlement failed', 422);
+            return $this->holdForConfirmation($uid, $session, $credentialDigest);
+        }
+
+        if (empty($result['success']) && !empty($result['review'])) {
+            return $this->escalate($uid, $session, (string) ($result['error'] ?? 'settlement_unresolved'));
+        }
+        if (empty($result['success']) && !empty($result['pending'])) {
+            return $this->holdForConfirmation($uid, $session, $credentialDigest);
         }
 
         if (empty($result['success']) || empty($result['id_order'])) {
@@ -378,6 +412,7 @@ final class CheckoutService
         }
 
         $paymentMeta = json_decode($session['payment_meta'] ?? '{}', true) ?: [];
+        unset($paymentMeta[self::PENDING_DIGEST_KEY]);
         if (!empty($result['transaction_reference'])) {
             $paymentMeta['transaction_reference'] = $result['transaction_reference'];
         }
@@ -404,6 +439,62 @@ final class CheckoutService
     }
 
     // --------------------------------------------------------------- helpers
+
+    private function holdForConfirmation(string $uid, array $session, string $credentialDigest): Response
+    {
+        $paymentMeta = json_decode($session['payment_meta'] ?? '{}', true) ?: [];
+        $paymentMeta[self::PENDING_DIGEST_KEY] = $credentialDigest;
+        $this->sessions->update($uid, $this->idShop(), [
+            'status' => 'payment_pending',
+            'payment_meta' => json_encode($paymentMeta),
+            'updated_at' => date('Y-m-d H:i:s'),
+        ]);
+        $session = $this->sessions->findByUid($uid, $this->idShop()) ?? $session;
+
+        return Response::json(202, Formatter::checkoutSession($session, $this->registry));
+    }
+
+    private function escalate(string $uid, array $session, string $reason): Response
+    {
+        $paymentMeta = json_decode($session['payment_meta'] ?? '{}', true) ?: [];
+        unset($paymentMeta[self::PENDING_DIGEST_KEY]);
+        $paymentMeta['review_reason'] = $reason;
+        $this->sessions->update($uid, $this->idShop(), [
+            'status' => 'requires_escalation',
+            'payment_meta' => json_encode($paymentMeta),
+            'updated_at' => date('Y-m-d H:i:s'),
+        ]);
+
+        return UcpError::response(
+            'payment_requires_review',
+            "The payment needs merchant review ($reason). Do not pay again; contact the merchant.",
+            409
+        );
+    }
+
+    private static function credentialDigest(mixed $credential): string
+    {
+        return hash('sha256', is_string($credential) ? $credential : (string) json_encode(self::canonical($credential)));
+    }
+
+    private static function canonical(mixed $value): mixed
+    {
+        if (!is_array($value)) {
+            return $value;
+        }
+        if (!array_is_list($value)) {
+            ksort($value);
+        }
+
+        return array_map(self::canonical(...), $value);
+    }
+
+    private static function pendingDigest(array $session): string
+    {
+        $paymentMeta = json_decode($session['payment_meta'] ?? '{}', true);
+
+        return is_array($paymentMeta) ? (string) ($paymentMeta[self::PENDING_DIGEST_KEY] ?? '') : '';
+    }
 
     public static function instrumentError(mixed $instrument): ?string
     {

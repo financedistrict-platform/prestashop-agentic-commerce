@@ -8,6 +8,8 @@ if (!defined('_PS_VERSION_')) {
 
 class PrismClient
 {
+    private const SETTLE_TIMEOUT = 45;
+
     private string $apiUrl;
     private string $apiKey;
 
@@ -41,14 +43,47 @@ class PrismClient
         return $this->request('POST', "/api/v{$version}/payment/settle", [
             'paymentPayload' => $paymentPayload,
             'paymentRequirements' => $paymentRequirements,
-        ], 30);
+        ], self::SETTLE_TIMEOUT, true);
     }
 
     /**
      * @param array<string,mixed>|null $body
      * @return array<string,mixed>|null
      */
-    protected function request(string $method, string $path, ?array $body, int $timeout): ?array
+    protected function request(string $method, string $path, ?array $body, int $timeout, bool $refusalIsAnswer = false): ?array
+    {
+        $response = $this->transport($method, $path, $body, $timeout);
+        if ($response === null) {
+            return null;
+        }
+        [$code, $raw] = $response;
+
+        if ($code < 200 || $code >= 300) {
+            \PrestaShopLogger::addLog("[FD Prism] $method $path returned HTTP $code: " . substr($raw, 0, 500), 3);
+
+            return $refusalIsAnswer && self::isRefusal($code) ? ['success' => false, 'errorReason' => "http_$code"] : null;
+        }
+
+        $decoded = json_decode($raw, true);
+        if (!is_array($decoded)) {
+            \PrestaShopLogger::addLog("[FD Prism] $method $path returned invalid JSON: " . substr($raw, 0, 500), 3);
+
+            return null;
+        }
+
+        return $decoded;
+    }
+
+    private static function isRefusal(int $code): bool
+    {
+        return $code >= 400 && $code < 500 && $code !== 408 && $code !== 429;
+    }
+
+    /**
+     * @param array<string,mixed>|null $body
+     * @return array{0:int,1:string}|null
+     */
+    protected function transport(string $method, string $path, ?array $body, int $timeout): ?array
     {
         if (!function_exists('curl_init')) {
             \PrestaShopLogger::addLog("[FD Prism] cURL unavailable for $method $path", 3);
@@ -85,20 +120,8 @@ class PrismClient
 
             return null;
         }
-        if ($code < 200 || $code >= 300) {
-            \PrestaShopLogger::addLog("[FD Prism] $method $path returned HTTP $code: " . substr((string) $raw, 0, 500), 3);
 
-            return null;
-        }
-
-        $decoded = json_decode((string) $raw, true);
-        if (!is_array($decoded)) {
-            \PrestaShopLogger::addLog("[FD Prism] $method $path returned invalid JSON: " . substr((string) $raw, 0, 500), 3);
-
-            return null;
-        }
-
-        return $decoded;
+        return [$code, (string) $raw];
     }
 
     public static function minorToMajorString(int $minorUnits): string

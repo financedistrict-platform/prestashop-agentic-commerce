@@ -8,6 +8,7 @@ use FD\PrismPayment\Prism\PrismHandler;
 use FD\PrismUcp\Payment\PaymentRegistry;
 use FD\PrismUcp\Payment\ReplayLedger;
 use FD\PrismUcp\Ucp\RequestContext;
+use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 
 final class PrismHandlerTest extends TestCase
@@ -408,6 +409,85 @@ final class PrismHandlerTest extends TestCase
             $this->assertTrue($result['success'], var_export($type, true) . ' ' . ($result['error'] ?? ''));
         }
     }
+
+    private function settleWithGateway(?array $gatewayResponse): array
+    {
+        if ($gatewayResponse !== null) {
+            $this->client->responses['POST /api/v2/payment/settle'] = $gatewayResponse;
+        }
+
+        return $this->settleThroughCore([
+            'session' => $this->session(),
+            'cart' => new Cart(),
+            'instrument_type' => 'x402',
+            'credential' => $this->x402Credential(),
+            'checkout_meta' => $this->checkoutMeta(),
+        ]);
+    }
+
+    public function test_no_gateway_answer_is_an_unknown_outcome_not_a_rejection(): void
+    {
+        $result = $this->settleWithGateway(null);
+
+        $this->assertFalse($result['success']);
+        $this->assertTrue($result['pending'] ?? false);
+        $this->assertArrayNotHasKey('review', $result);
+        $this->assertSame([], $this->module->validated);
+    }
+
+    public function test_gateway_settlement_pending_is_an_unknown_outcome(): void
+    {
+        $result = $this->settleWithGateway(['success' => false, 'transaction' => '', 'errorReason' => 'settlement_pending']);
+
+        $this->assertFalse($result['success']);
+        $this->assertTrue($result['pending'] ?? false);
+        $this->assertSame([], $this->module->validated);
+    }
+
+    public function test_success_without_a_transaction_is_an_unknown_outcome(): void
+    {
+        $result = $this->settleWithGateway(['success' => true, 'transaction' => '']);
+
+        $this->assertTrue($result['pending'] ?? false);
+        $this->assertSame([], $this->module->validated);
+    }
+
+    #[DataProvider('reviewReasons')]
+    public function test_consumed_or_unresolved_authorization_needs_review(string $reason): void
+    {
+        $result = $this->settleWithGateway(['success' => false, 'transaction' => '', 'errorReason' => $reason]);
+
+        $this->assertFalse($result['success']);
+        $this->assertTrue($result['review'] ?? false);
+        $this->assertSame($reason, $result['error']);
+        $this->assertArrayNotHasKey('pending', $result);
+        $this->assertSame([], $this->module->validated);
+    }
+
+    public static function reviewReasons(): array
+    {
+        return [['authorization_consumed'], ['settlement_unresolved']];
+    }
+
+    public function test_any_other_gateway_reason_is_a_definite_rejection(): void
+    {
+        $result = $this->settleWithGateway(['success' => false, 'transaction' => '', 'errorReason' => 'insufficient_funds']);
+
+        $this->assertFalse($result['success']);
+        $this->assertSame('insufficient_funds', $result['error']);
+        $this->assertArrayNotHasKey('pending', $result);
+        $this->assertArrayNotHasKey('review', $result);
+    }
+
+    public function test_retry_of_a_settled_payment_places_the_order_once(): void
+    {
+        $this->assertTrue($this->settleWithGateway(null)['pending']);
+
+        $result = $this->settleWithGateway(['success' => true, 'transaction' => '0x' . str_repeat('cd', 32), 'network' => 'eip155:84532']);
+
+        $this->assertTrue($result['success']);
+        $this->assertCount(1, $this->module->validated);
+    }
 }
 
 final class FdTestPrismClient extends PrismClient
@@ -421,7 +501,7 @@ final class FdTestPrismClient extends PrismClient
         parent::__construct('https://prism-gw.example', 'key');
     }
 
-    protected function request(string $method, string $path, ?array $body, int $timeout): ?array
+    protected function request(string $method, string $path, ?array $body, int $timeout, bool $refusalIsAnswer = false): ?array
     {
         $this->paths[] = "$method $path";
         $this->bodies["$method $path"] = $body;

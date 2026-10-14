@@ -27,6 +27,10 @@ final class PrismHandler implements PaymentHandlerInterface, VersionedPaymentHan
 
     public const CACHE_TTL = 300;
 
+    private const REASON_PENDING = 'settlement_pending';
+
+    private const REVIEW_REASONS = ['authorization_consumed', 'settlement_unresolved'];
+
     private const LEGACY_ID = 'x402';
 
     private const INSTRUMENT_TYPE = 'x402';
@@ -252,15 +256,20 @@ final class PrismHandler implements PaymentHandlerInterface, VersionedPaymentHan
         }
         $result = $this->client()->settle($payment->version, $payment->paymentPayload, $payment->requirements);
         if (!$result) {
-            return ['success' => false, 'error' => 'Prism settlement request failed'];
+            return self::pending();
         }
 
         $txRef = $result['transaction'] ?? $result['transactionHash']
             ?? $result['facilitatorTransactionId'] ?? $result['txHash'] ?? '';
-        if (($result['success'] ?? null) !== true || !is_string($txRef) || $txRef === '') {
+        if (($result['success'] ?? null) === true && (!is_string($txRef) || $txRef === '')) {
+            \PrestaShopLogger::addLog('[FD Prism] Settlement reported success without a transaction; outcome unknown', 3);
+
+            return self::pending();
+        }
+        if (($result['success'] ?? null) !== true) {
             \PrestaShopLogger::addLog('[FD Prism] Settlement not confirmed; no order placed. Response: ' . json_encode($result), 3);
 
-            return ['success' => false, 'error' => $result['error'] ?? $result['errorReason'] ?? $result['reason'] ?? 'Settlement failed'];
+            return self::unsettled($result);
         }
         if (isset($result['network']) && $result['network'] !== $payment->network) {
             \PrestaShopLogger::addLog('[FD Prism] Settlement network ' . json_encode($result['network']) . ' differs from the signed network ' . $payment->network . '; no order placed for transaction ' . $txRef, 3);
@@ -275,6 +284,24 @@ final class PrismHandler implements PaymentHandlerInterface, VersionedPaymentHan
         }
 
         return $this->placeOrder($input['cart'], $txRef, $payment->network, Formatter::toMajor($paidAmount));
+    }
+
+    private static function pending(): array
+    {
+        return ['success' => false, 'pending' => true, 'error' => 'Prism settlement outcome is unknown'];
+    }
+
+    private static function unsettled(array $result): array
+    {
+        $reason = $result['errorReason'] ?? null;
+        if ($reason === self::REASON_PENDING) {
+            return self::pending();
+        }
+        if (in_array($reason, self::REVIEW_REASONS, true)) {
+            return ['success' => false, 'review' => true, 'error' => $reason];
+        }
+
+        return ['success' => false, 'error' => $result['error'] ?? $reason ?? $result['reason'] ?? 'Settlement failed'];
     }
 
     private function claimError(mixed $session, string $authorizationKey): ?string

@@ -74,9 +74,9 @@ class SessionRepository
     }
 
     /**
-     * Atomically claim a session for completion: flip incomplete ->
-     * complete_in_progress only if currently incomplete. Returns true if THIS
-     * call won the claim (NFR-2, once-only settlement).
+     * Atomically claim a session for completion: flip incomplete or
+     * payment_pending -> complete_in_progress. Returns true if THIS call won
+     * the claim (NFR-2, once-only settlement).
      */
     public function claimForCompletion(string $uid, int $idShop): bool
     {
@@ -84,7 +84,7 @@ class SessionRepository
                 SET `status` = "complete_in_progress", `updated_at` = "' . pSQL(date('Y-m-d H:i:s')) . '"
                 WHERE `session_uid` = "' . pSQL($uid) . '"
                 AND `id_shop` = ' . (int) $idShop . '
-                AND `status` = "incomplete"';
+                AND `status` IN ("incomplete", "payment_pending")';
         \Db::getInstance()->execute($sql);
         return \Db::getInstance()->Affected_Rows() === 1;
     }
