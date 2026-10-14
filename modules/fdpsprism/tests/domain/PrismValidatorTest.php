@@ -177,6 +177,27 @@ final class PrismValidatorTest extends TestCase
         $this->assertStringContainsString('not valid yet', (string) $this->verify($future));
     }
 
+    public function test_verify_can_skip_only_the_expiry_check(): void
+    {
+        $expired = FdTestX402::credential('4695');
+        $expired['paymentPayload']['payload']['authorization']['validBefore'] = (string) (time() - 3600);
+
+        $this->assertInstanceOf(VerifiedPayment::class, PrismValidator::verify($expired, $this->quote(), true));
+        $this->assertStringContainsString('expired', (string) PrismValidator::verify($expired, $this->quote()));
+    }
+
+    public function test_skipping_expiry_still_checks_the_signed_amount_and_recipient(): void
+    {
+        $wrongAmount = FdTestX402::credential('4695');
+        $wrongAmount['paymentPayload']['payload']['authorization']['validBefore'] = (string) (time() - 3600);
+        $wrongAmount['paymentPayload']['payload']['authorization']['value'] = '1';
+        $wrongRecipient = FdTestX402::credential('4695');
+        $wrongRecipient['paymentPayload']['payload']['authorization']['to'] = '0x' . str_repeat('9', 40);
+
+        $this->assertStringContainsString('does not equal the required amount', (string) PrismValidator::verify($wrongAmount, $this->quote(), true));
+        $this->assertStringContainsString('recipient', (string) PrismValidator::verify($wrongRecipient, $this->quote(), true));
+    }
+
     public function test_verify_rejects_a_resource_of_another_session(): void
     {
         $credential = FdTestX402::credential('4695');

@@ -50,7 +50,7 @@ final class PrismValidator
         return self::decodeValue($decoded['authorization']);
     }
 
-    public static function verify(array $credential, array $quote): VerifiedPayment|string
+    public static function verify(array $credential, array $quote, bool $allowExpired = false): VerifiedPayment|string
     {
         $payload = $credential['paymentPayload'] ?? $credential;
         if (!is_array($payload)) {
@@ -93,7 +93,7 @@ final class PrismValidator
         if (!is_array($authorization)) {
             return 'Payment authorization is missing';
         }
-        $error = self::authorizationError($authorization, $requirement);
+        $error = self::authorizationError($authorization, $requirement, $allowExpired);
         if ($error !== null) {
             return $error;
         }
@@ -114,7 +114,7 @@ final class PrismValidator
         );
     }
 
-    private static function authorizationError(array $authorization, array $requirement): ?string
+    private static function authorizationError(array $authorization, array $requirement, bool $allowExpired): ?string
     {
         foreach (self::AUTHORIZATION_FIELDS as $field) {
             if (!array_key_exists($field, $authorization)) {
@@ -145,7 +145,7 @@ final class PrismValidator
         if ((int) $authorization['validAfter'] > $now + self::START_LEEWAY) {
             return 'Payment authorization is not valid yet';
         }
-        if ((int) $authorization['validBefore'] <= $now) {
+        if (!$allowExpired && (int) $authorization['validBefore'] <= $now) {
             return 'Payment authorization has expired';
         }
 

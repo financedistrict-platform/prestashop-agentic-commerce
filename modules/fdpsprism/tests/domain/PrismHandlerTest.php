@@ -8,6 +8,7 @@ use FD\PrismPayment\Prism\PrismHandler;
 use FD\PrismUcp\Payment\PaymentRegistry;
 use FD\PrismUcp\Payment\ReplayLedger;
 use FD\PrismUcp\Ucp\RequestContext;
+use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 
 final class PrismHandlerTest extends TestCase
@@ -408,6 +409,264 @@ final class PrismHandlerTest extends TestCase
             $this->assertTrue($result['success'], var_export($type, true) . ' ' . ($result['error'] ?? ''));
         }
     }
+
+    private function settleWithGateway(?array $gatewayResponse): array
+    {
+        if ($gatewayResponse !== null) {
+            $this->client->responses['POST /api/v2/payment/settle'] = $gatewayResponse;
+        }
+
+        return $this->settleThroughCore([
+            'session' => $this->session(),
+            'cart' => new Cart(),
+            'instrument_type' => 'x402',
+            'credential' => $this->x402Credential(),
+            'checkout_meta' => $this->checkoutMeta(),
+        ]);
+    }
+
+    public function test_no_gateway_answer_is_an_unknown_outcome_not_a_rejection(): void
+    {
+        $result = $this->settleWithGateway(null);
+
+        $this->assertFalse($result['success']);
+        $this->assertTrue($result['pending'] ?? false);
+        $this->assertArrayNotHasKey('review', $result);
+        $this->assertSame([], $this->module->validated);
+    }
+
+    public function test_gateway_settlement_pending_is_an_unknown_outcome(): void
+    {
+        $result = $this->settleWithGateway(['success' => false, 'transaction' => '', 'errorReason' => 'settlement_pending']);
+
+        $this->assertFalse($result['success']);
+        $this->assertTrue($result['pending'] ?? false);
+        $this->assertSame([], $this->module->validated);
+    }
+
+    public function test_success_without_a_transaction_is_an_unknown_outcome(): void
+    {
+        $result = $this->settleWithGateway(['success' => true, 'transaction' => '']);
+
+        $this->assertTrue($result['pending'] ?? false);
+        $this->assertSame([], $this->module->validated);
+    }
+
+    #[DataProvider('reviewReasons')]
+    public function test_consumed_or_unresolved_authorization_needs_review(string $reason): void
+    {
+        $result = $this->settleWithGateway(['success' => false, 'transaction' => '', 'errorReason' => $reason]);
+
+        $this->assertFalse($result['success']);
+        $this->assertTrue($result['review'] ?? false);
+        $this->assertSame($reason, $result['error']);
+        $this->assertArrayNotHasKey('pending', $result);
+        $this->assertSame([], $this->module->validated);
+    }
+
+    public static function reviewReasons(): array
+    {
+        return [['authorization_consumed'], ['settlement_unresolved']];
+    }
+
+    #[DataProvider('definiteReasons')]
+    public function test_a_reason_known_to_precede_any_broadcast_is_a_definite_rejection(string $reason): void
+    {
+        $result = $this->settleWithGateway(['success' => false, 'transaction' => '', 'errorReason' => $reason]);
+
+        $this->assertFalse($result['success']);
+        $this->assertSame($reason, $result['error']);
+        $this->assertArrayNotHasKey('pending', $result);
+        $this->assertArrayNotHasKey('review', $result);
+    }
+
+    public static function definiteReasons(): array
+    {
+        return array_map(static fn (string $reason): array => [$reason], [
+            'unsupported_network',
+            'unsupported_token',
+            'point_of_service_not_found',
+            'seller_wallet_not_configured',
+            'affiliate_residual_overflow',
+            'affiliate_settlement_unavailable',
+            'cashback_outside_campaign_bounds',
+            'sanctions_hit',
+            'risk_threshold_exceeded',
+            'network_not_found',
+            'invalid_signature',
+            'invalid_payment_accepted_mismatch',
+            'invalid_exact_evm_payload_recipient_mismatch',
+            'invalid_amount_below_required',
+            'invalid_exact_evm_payload_authorization_expired',
+            'invalid_exact_evm_payload_authorization_not_yet_valid',
+            'insufficient_funds',
+            'balance_check_failed',
+            'unknown_token: 0x036CbD53842c5426634e7929541eC2318f3dCF7e on chain 84532',
+            'invalid_authorization_recipient',
+            'authorization_mismatch',
+            'http_400',
+            'http_403',
+        ]);
+    }
+
+    #[DataProvider('unknownOutcomeReasons')]
+    public function test_an_unknown_outcome_reason_holds_the_session_instead_of_declining(mixed $reason): void
+    {
+        $result = $this->settleWithGateway(['success' => false, 'transaction' => '', 'errorReason' => $reason]);
+
+        $this->assertFalse($result['success']);
+        $this->assertTrue($result['pending'] ?? false, var_export($reason, true));
+        $this->assertArrayNotHasKey('review', $result);
+        $this->assertSame([], $this->module->validated);
+    }
+
+    public static function unknownOutcomeReasons(): array
+    {
+        return array_map(static fn (mixed $reason): array => [$reason], [
+            'unexpected_settle_error',
+            'receipt_timeout',
+            'settlement_pending',
+            'execution_failed: Transaction would revert: execution reverted: FiatTokenV2: authorization is used or canceled',
+            'execution_cancelled',
+            'settlement_failed',
+            'transaction_reverted',
+            'facilitator_settlement_failed',
+            'some_reason_added_by_a_future_gateway',
+            '',
+            null,
+            ['not', 'a', 'string'],
+        ]);
+    }
+
+    public function test_a_failure_without_any_reason_holds_the_session(): void
+    {
+        $result = $this->settleWithGateway(['success' => false, 'transaction' => '']);
+
+        $this->assertTrue($result['pending'] ?? false);
+    }
+
+    #[DataProvider('landedNonceReasons')]
+    public function test_a_resumed_retry_with_an_unlisted_reason_goes_to_review(string $reason, string $expectedError): void
+    {
+        $result = $this->settleResumed(['success' => false, 'transaction' => '', 'errorReason' => $reason]);
+
+        $this->assertFalse($result['success']);
+        $this->assertTrue($result['review'] ?? false);
+        $this->assertSame($expectedError, $result['error']);
+        $this->assertArrayNotHasKey('pending', $result);
+    }
+
+    public static function landedNonceReasons(): array
+    {
+        return [
+            ['execution_failed: Transaction would revert: execution reverted: FiatTokenV2: authorization is used or canceled', 'execution_failed'],
+            ['settlement_failed', 'settlement_failed'],
+            ['transaction_reverted', 'transaction_reverted'],
+        ];
+    }
+
+    public function test_a_resumed_retry_without_a_reason_goes_to_review(): void
+    {
+        $result = $this->settleResumed(['success' => false, 'transaction' => '']);
+
+        $this->assertTrue($result['review'] ?? false);
+        $this->assertSame('settlement_unresolved', $result['error']);
+    }
+
+    #[DataProvider('transientReasons')]
+    public function test_a_resumed_retry_that_is_still_unanswered_stays_pending(string $reason): void
+    {
+        $result = $this->settleResumed(['success' => false, 'transaction' => '', 'errorReason' => $reason]);
+
+        $this->assertTrue($result['pending'] ?? false);
+        $this->assertArrayNotHasKey('review', $result);
+    }
+
+    public static function transientReasons(): array
+    {
+        return [['unexpected_settle_error'], ['receipt_timeout'], ['settlement_pending']];
+    }
+
+    public function test_a_resumed_retry_with_no_gateway_answer_stays_pending(): void
+    {
+        $result = $this->settleResumed(null);
+
+        $this->assertTrue($result['pending'] ?? false);
+    }
+
+    public function test_a_resumed_retry_with_a_definite_reason_is_left_to_the_checkout_to_escalate(): void
+    {
+        $result = $this->settleResumed(['success' => false, 'transaction' => '', 'errorReason' => 'insufficient_funds']);
+
+        $this->assertFalse($result['success']);
+        $this->assertArrayNotHasKey('pending', $result);
+        $this->assertArrayNotHasKey('review', $result);
+    }
+
+    private function settleResumed(?array $gatewayResponse): array
+    {
+        if ($gatewayResponse !== null) {
+            $this->client->responses['POST /api/v2/payment/settle'] = $gatewayResponse;
+        }
+
+        return $this->settleThroughCore([
+            'session' => $this->session(),
+            'cart' => new Cart(),
+            'instrument_type' => 'x402',
+            'credential' => $this->x402Credential(),
+            'checkout_meta' => $this->checkoutMeta(),
+            'resumed' => true,
+        ]);
+    }
+
+    private function expiredCredential(): array
+    {
+        $credential = $this->x402Credential();
+        $credential['paymentPayload']['payload']['authorization']['validBefore'] = (string) (time() - 3600);
+
+        return $credential;
+    }
+
+    public function test_resumed_settlement_of_an_expired_authorization_still_reaches_the_gateway(): void
+    {
+        $this->client->responses['POST /api/v2/payment/settle'] = ['success' => false, 'transaction' => '', 'errorReason' => 'settlement_unresolved'];
+
+        $result = $this->settleThroughCore([
+            'session' => $this->session(),
+            'cart' => new Cart(),
+            'instrument_type' => 'x402',
+            'credential' => $this->expiredCredential(),
+            'checkout_meta' => $this->checkoutMeta(),
+            'resumed' => true,
+        ]);
+
+        $this->assertSame(['POST /api/v2/payment/settle'], $this->client->paths);
+        $this->assertTrue($result['review'] ?? false);
+    }
+
+    public function test_first_settlement_of_an_expired_authorization_never_reaches_the_gateway(): void
+    {
+        $result = $this->settleThroughCore([
+            'session' => $this->session(),
+            'cart' => new Cart(),
+            'instrument_type' => 'x402',
+            'credential' => $this->expiredCredential(),
+            'checkout_meta' => $this->checkoutMeta(),
+        ]);
+
+        $this->assertFalse($result['success']);
+        $this->assertSame([], $this->client->paths);
+    }
+
+    public function test_retry_of_a_settled_payment_places_the_order_once(): void
+    {
+        $this->assertTrue($this->settleWithGateway(null)['pending']);
+
+        $result = $this->settleWithGateway(['success' => true, 'transaction' => '0x' . str_repeat('cd', 32), 'network' => 'eip155:84532']);
+
+        $this->assertTrue($result['success']);
+        $this->assertCount(1, $this->module->validated);
+    }
 }
 
 final class FdTestPrismClient extends PrismClient
@@ -421,7 +680,7 @@ final class FdTestPrismClient extends PrismClient
         parent::__construct('https://prism-gw.example', 'key');
     }
 
-    protected function request(string $method, string $path, ?array $body, int $timeout): ?array
+    protected function request(string $method, string $path, ?array $body, int $timeout, bool $refusalIsAnswer = false): ?array
     {
         $this->paths[] = "$method $path";
         $this->bodies["$method $path"] = $body;
