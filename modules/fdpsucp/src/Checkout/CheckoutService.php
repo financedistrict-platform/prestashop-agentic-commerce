@@ -401,14 +401,14 @@ final class CheckoutService
         } catch (\Throwable $e) {
             \PrestaShopLogger::addLog('[FD UCP] Settlement outcome unknown: ' . $e->getMessage(), 3);
 
-            return $this->holdForConfirmation($uid, $session, $credentialDigest);
+            return $this->holdForConfirmation($uid, $session, $credentialDigest, 'handler_exception');
         }
 
         if (empty($result['success']) && !empty($result['review'])) {
             return $this->escalate($uid, $session, (string) ($result['error'] ?? 'settlement_unresolved'));
         }
         if (empty($result['success']) && !empty($result['pending'])) {
-            return $this->holdForConfirmation($uid, $session, $credentialDigest);
+            return $this->holdForConfirmation($uid, $session, $credentialDigest, (string) ($result['reason'] ?? 'settlement_outcome_unknown'));
         }
         if (empty($result['success']) && $resumed) {
             return $this->escalate($uid, $session, (string) ($result['error'] ?? 'settlement_unresolved'));
@@ -450,8 +450,9 @@ final class CheckoutService
 
     // --------------------------------------------------------------- helpers
 
-    private function holdForConfirmation(string $uid, array $session, string $credentialDigest): Response
+    private function holdForConfirmation(string $uid, array $session, string $credentialDigest, string $reason): Response
     {
+        \PrestaShopLogger::addLog("[FD UCP] Payment held, settlement outcome unknown: session $uid, reason $reason. Only the same credential may retry; do not release the cart.", 3);
         $paymentMeta = json_decode($session['payment_meta'] ?? '{}', true) ?: [];
         $paymentMeta[self::PENDING_DIGEST_KEY] = $credentialDigest;
         $this->sessions->update($uid, $this->idShop(), [
@@ -466,6 +467,7 @@ final class CheckoutService
 
     private function escalate(string $uid, array $session, string $reason): Response
     {
+        \PrestaShopLogger::addLog("[FD UCP] Payment held for merchant review: session $uid, reason $reason. Funds may have moved; check the transaction before releasing or refunding.", 3);
         $paymentMeta = json_decode($session['payment_meta'] ?? '{}', true) ?: [];
         unset($paymentMeta[self::PENDING_DIGEST_KEY]);
         $paymentMeta['review_reason'] = $reason;

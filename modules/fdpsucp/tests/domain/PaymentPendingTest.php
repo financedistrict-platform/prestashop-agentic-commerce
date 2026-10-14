@@ -315,6 +315,74 @@ final class PaymentPendingTest extends TestCase
         $this->assertCount(1, $this->handler->settled);
         $this->assertSame('requires_escalation', $this->row()['status']);
     }
+
+    private function loggedMessages(): array
+    {
+        return array_map(
+            static fn (array $log): string => $log['severity'] . ' ' . $log['message'],
+            array_values(array_filter(PrestaShopLogger::$logs, static fn (array $log): bool => str_contains($log['message'], '[FD UCP] Payment held')))
+        );
+    }
+
+    public function test_a_held_payment_is_logged_as_an_error_with_the_gateway_reason(): void
+    {
+        $this->handler->script = [self::PENDING + ['reason' => 'receipt_timeout']];
+
+        $this->complete();
+
+        $logs = $this->loggedMessages();
+        $this->assertCount(1, $logs);
+        $this->assertStringStartsWith('3 ', $logs[0]);
+        $this->assertStringContainsString('session ' . self::SESSION_ID, $logs[0]);
+        $this->assertStringContainsString('reason receipt_timeout', $logs[0]);
+        $this->assertStringNotContainsString('0xaa', $logs[0]);
+    }
+
+    public function test_a_handler_exception_hold_is_logged(): void
+    {
+        $this->handler->script = [new RuntimeException('connection reset')];
+
+        $this->complete();
+
+        $logs = $this->loggedMessages();
+        $this->assertCount(1, $logs);
+        $this->assertStringContainsString('reason handler_exception', $logs[0]);
+    }
+
+    public function test_an_escalated_payment_is_logged_as_an_error_with_the_reason(): void
+    {
+        $this->handler->script = [['success' => false, 'review' => true, 'error' => 'authorization_consumed']];
+
+        $this->complete();
+
+        $logs = $this->loggedMessages();
+        $this->assertCount(1, $logs);
+        $this->assertStringStartsWith('3 ', $logs[0]);
+        $this->assertStringContainsString('held for merchant review', $logs[0]);
+        $this->assertStringContainsString('reason authorization_consumed', $logs[0]);
+    }
+
+    public function test_a_resumed_failure_is_escalated_and_logged_with_its_reason(): void
+    {
+        $this->pendingSession();
+        $this->handler->script = [['success' => false, 'review' => true, 'error' => 'execution_failed']];
+
+        $this->complete();
+
+        $this->assertSame('requires_escalation', $this->row()['status']);
+        $this->assertStringContainsString('reason execution_failed', implode("
+", $this->loggedMessages()));
+        $this->assertCount(2, $this->loggedMessages());
+    }
+
+    public function test_a_definite_rejection_is_not_logged_as_a_held_payment(): void
+    {
+        $this->handler->script = [['success' => false, 'error' => 'insufficient_funds']];
+
+        $this->complete();
+
+        $this->assertSame([], $this->loggedMessages());
+    }
 }
 
 final class FdTestScriptedPrismHandler implements PaymentHandlerInterface
