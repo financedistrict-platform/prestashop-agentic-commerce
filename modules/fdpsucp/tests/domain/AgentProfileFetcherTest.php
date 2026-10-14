@@ -67,6 +67,50 @@ final class AgentProfileFetcherTest extends TestCase
         $this->assertTrue($this->fetcher([])->lookup('http://127.0.0.1/p')['failed']);
     }
 
+    public static function nonPublicAddresses(): array
+    {
+        return [
+            'carrier-grade NAT start' => ['100.64.0.0'],
+            'carrier-grade NAT' => ['100.64.0.1'],
+            'carrier-grade NAT end' => ['100.127.255.255'],
+            'IETF protocol assignments' => ['192.0.0.8'],
+            'TEST-NET-1' => ['192.0.2.1'],
+            'benchmarking' => ['198.18.0.1'],
+            'benchmarking end' => ['198.19.255.255'],
+            'TEST-NET-2' => ['198.51.100.7'],
+            'TEST-NET-3' => ['203.0.113.9'],
+            'multicast' => ['224.0.0.1'],
+        ];
+    }
+
+    #[DataProvider('nonPublicAddresses')]
+    public function test_non_public_special_use_addresses_are_rejected_without_a_request(string $ip): void
+    {
+        $fetcher = $this->fetcher([$ip], $this->declaring('2026-08-25'));
+        $fetcher::$requests = [];
+
+        $this->assertTrue($fetcher->lookup('https://agent.example/p')['failed'], $ip);
+        $this->assertSame([], $fetcher::$requests, $ip);
+    }
+
+    public static function addressesBesideTheSpecialUseRanges(): array
+    {
+        return [
+            'just below carrier-grade NAT' => ['100.63.255.255'],
+            'just above carrier-grade NAT' => ['100.128.0.0'],
+            'just below benchmarking' => ['198.17.255.255'],
+            'just above benchmarking' => ['198.20.0.0'],
+        ];
+    }
+
+    #[DataProvider('addressesBesideTheSpecialUseRanges')]
+    public function test_public_addresses_next_to_the_special_use_ranges_are_fetched(string $ip): void
+    {
+        $fetcher = $this->fetcher([$ip], $this->declaring('2026-08-25'));
+
+        $this->assertSame('2026-08-25', $fetcher->lookup('https://agent.example/p')['version'], $ip);
+    }
+
     public function test_any_private_address_among_several_rejects_the_host(): void
     {
         $this->assertTrue($this->fetcher(['93.184.216.34', '10.0.0.5'])->lookup('https://agent.example/p')['failed']);
