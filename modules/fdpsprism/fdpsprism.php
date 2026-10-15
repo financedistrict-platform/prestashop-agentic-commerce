@@ -47,13 +47,10 @@ class FdPsPrism extends PaymentModule
         if (!Validate::isLoadedObject($order) || $order->module !== $this->name) {
             return '';
         }
-        $transactionHash = '';
-        foreach ($order->getOrderPaymentCollection() as $payment) {
-            if (!empty($payment->transaction_id)) {
-                $transactionHash = (string) $payment->transaction_id;
-                break;
-            }
+        if (!interface_exists(\FD\PrismUcp\Payment\PaymentHandlerInterface::class)) {
+            return '';
         }
+        $transactionHash = SettlementSummary::transactionHash($order->getOrderPaymentCollection(), \FD\PrismPayment\Prism\PrismHandler::NAME);
         $idShop = (int) $order->id_shop;
 
         return SettlementSummary::render(SettlementSummary::load($transactionHash, ConfigResolver::apiUrl($idShop), ConfigResolver::apiKey($idShop)));

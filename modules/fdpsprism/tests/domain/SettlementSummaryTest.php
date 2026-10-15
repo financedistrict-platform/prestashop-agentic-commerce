@@ -3,6 +3,7 @@
 declare(strict_types=1);
 
 use FD\PrismPayment\Prism\PrismClient;
+use FD\PrismPayment\Prism\PrismHandler;
 use FD\PrismPayment\Prism\SettlementSummary;
 use PHPUnit\Framework\TestCase;
 
@@ -74,6 +75,27 @@ final class SettlementSummaryTest extends TestCase
 
         $this->assertStringContainsString('&lt;b&gt;', $html);
         $this->assertStringNotContainsString('<b>', $html);
+    }
+
+    public function test_transaction_hash_comes_from_the_prism_payment_row_whatever_the_order(): void
+    {
+        $payments = [
+            (object) ['payment_method' => 'Bank wire', 'transaction_id' => '0xother'],
+            (object) ['payment_method' => PrismHandler::NAME, 'transaction_id' => '0xabc'],
+        ];
+
+        $this->assertSame('0xabc', SettlementSummary::transactionHash($payments, PrismHandler::NAME));
+        $this->assertSame('0xabc', SettlementSummary::transactionHash(array_reverse($payments), PrismHandler::NAME));
+    }
+
+    public function test_transaction_hash_is_empty_without_a_prism_payment_row(): void
+    {
+        $payments = [
+            (object) ['payment_method' => 'Bank wire', 'transaction_id' => '0xother'],
+            (object) ['payment_method' => PrismHandler::NAME, 'transaction_id' => ''],
+        ];
+
+        $this->assertSame('', SettlementSummary::transactionHash($payments, PrismHandler::NAME));
     }
 
     public function test_upgrade_registers_the_order_hook(): void

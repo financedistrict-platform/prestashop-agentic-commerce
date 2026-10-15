@@ -20,6 +20,17 @@ final class SettlementSummary
         return self::fromPrism($client->settlementSummary($transactionHash));
     }
 
+    public static function transactionHash(iterable $payments, string $paymentMethod): string
+    {
+        foreach ($payments as $payment) {
+            if (($payment->payment_method ?? null) === $paymentMethod && !empty($payment->transaction_id)) {
+                return (string) $payment->transaction_id;
+            }
+        }
+
+        return '';
+    }
+
     public static function fromPrism(?array $body): array
     {
         if ($body === null) {
