@@ -38,6 +38,11 @@ class PrismClient
         ], 30);
     }
 
+    public function settlementSummary(string $transactionHash): ?array
+    {
+        return $this->request('GET', '/api/v2/merchant/payments/' . rawurlencode($transactionHash) . '/settlement', null, 5);
+    }
+
     public function settle(int $version, array $paymentPayload, array $paymentRequirements): ?array
     {
         return $this->request('POST', "/api/v{$version}/payment/settle", [
