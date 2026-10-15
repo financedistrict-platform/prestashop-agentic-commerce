@@ -21,17 +21,17 @@ final class ConfigResolver
     public const KEY_API = 'FDPSPRISM_API_KEY';
 
     /** Gateway base URL for the current shop (defaults to prod if unset). */
-    public static function apiUrl(): string
+    public static function apiUrl(?int $idShop = null): string
     {
-        $url = trim((string) \Configuration::get(self::KEY_URL));
+        $url = trim((string) \Configuration::get(self::KEY_URL, null, null, $idShop));
 
         return $url !== '' ? rtrim($url, '/') : self::DEFAULT_URL;
     }
 
     /** Prism API key for the current shop ('' if not configured). */
-    public static function apiKey(): string
+    public static function apiKey(?int $idShop = null): string
     {
-        return trim((string) \Configuration::get(self::KEY_API));
+        return trim((string) \Configuration::get(self::KEY_API, null, null, $idShop));
     }
 
     /** True when both URL and key are present, i.e. the handler can call the gateway. */

@@ -145,6 +145,8 @@ RewriteRule ^module/fdpsucp/api(?:/(.*))?$ index.php?fc=module&module=fdpsucp&co
 2. Enter your **Prism Gateway URL** and **API Key** (stored per-shop)
 3. Save — the handler is advertised in discovery only once configured
 
+The order page of a Prism order shows a "Prism settlement" block with Net received and Refund up to. Refund at most that amount; buyer cashback is already paid on-chain. After upgrading from 0.7.10, run the module upgrade (Module Manager → Upgrade) so the block's hook is registered.
+
 ### UCP versions
 
 The store speaks three UCP versions. Set them under **Modules → Finance District UCP → Configure → UCP versions**:
