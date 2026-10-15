@@ -5,10 +5,6 @@ declare(strict_types=1);
 use FD\PrismUcp\Ucp\CapabilitySecret;
 use PHPUnit\Framework\TestCase;
 
-/**
- * The per-resource capability-secret ownership check: legacy (no stored hash),
- * missing secret (the common integration mistake), wrong secret, and match.
- */
 final class CapabilitySecretTest extends TestCase
 {
     private const SECRET = 'a-real-capability-secret';
@@ -18,27 +14,15 @@ final class CapabilitySecretTest extends TestCase
         return hash('sha256', $secret);
     }
 
-    public function test_legacy_resource_without_stored_hash_is_ok(): void
+    public function test_issue_returns_a_base64url_secret_and_its_sha256_hash(): void
     {
-        $this->assertSame(CapabilitySecret::OK, CapabilitySecret::classify('', ''));
-        $this->assertSame(CapabilitySecret::OK, CapabilitySecret::classify('', 'anything'));
-        $this->assertTrue(CapabilitySecret::authorizes('', ''));
-    }
+        $first = CapabilitySecret::issue();
+        $second = CapabilitySecret::issue();
 
-    public function test_missing_secret_is_distinguished_from_mismatch(): void
-    {
-        $stored = $this->hashOf(self::SECRET);
-
-        $this->assertSame(CapabilitySecret::MISSING, CapabilitySecret::classify($stored, ''));
-        $this->assertSame(CapabilitySecret::MISMATCH, CapabilitySecret::classify($stored, 'wrong-secret'));
-    }
-
-    public function test_correct_secret_authorizes(): void
-    {
-        $stored = $this->hashOf(self::SECRET);
-
-        $this->assertSame(CapabilitySecret::OK, CapabilitySecret::classify($stored, self::SECRET));
-        $this->assertTrue(CapabilitySecret::authorizes($stored, self::SECRET));
+        $this->assertMatchesRegularExpression('/^[A-Za-z0-9_-]{43}$/', $first['secret']);
+        $this->assertSame(hash('sha256', $first['secret']), $first['hash']);
+        $this->assertNotSame($first['secret'], $second['secret']);
+        $this->assertTrue(CapabilitySecret::holds($first['hash'], $first['secret']));
     }
 
     public function test_holds_requires_a_stored_hash_and_the_matching_secret(): void
@@ -52,11 +36,17 @@ final class CapabilitySecretTest extends TestCase
         $this->assertFalse(CapabilitySecret::holds('', self::SECRET));
     }
 
-    public function test_authorizes_is_false_for_missing_and_wrong(): void
+    public function test_holds_rejects_a_malformed_stored_hash(): void
     {
         $stored = $this->hashOf(self::SECRET);
 
-        $this->assertFalse(CapabilitySecret::authorizes($stored, ''));
-        $this->assertFalse(CapabilitySecret::authorizes($stored, 'nope'));
+        $this->assertFalse(CapabilitySecret::holds('garbage', self::SECRET));
+        $this->assertFalse(CapabilitySecret::holds(strtoupper($stored), self::SECRET));
+    }
+
+    public function test_no_legacy_verdict_helpers_remain(): void
+    {
+        $this->assertFalse(method_exists(CapabilitySecret::class, 'classify'));
+        $this->assertFalse(method_exists(CapabilitySecret::class, 'authorizes'));
     }
 }

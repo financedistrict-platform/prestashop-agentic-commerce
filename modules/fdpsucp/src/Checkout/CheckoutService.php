@@ -46,14 +46,31 @@ final class CheckoutService
         return (int) $this->context->shop->id;
     }
 
+    private function ownedSession(string $uid): array|Response
+    {
+        if ($this->sessionSecret === '') {
+            return UcpError::response('session_secret_required', 'Send the UCP-Session-Secret header returned when this checkout session was created', 401);
+        }
+        $session = $this->sessions->findByUid($uid, $this->idShop());
+        if (!$session || !CapabilitySecret::holds((string) ($session['session_secret_hash'] ?? ''), $this->sessionSecret)) {
+            return UcpError::response('checkout_not_found', 'Checkout session not found', 404);
+        }
+
+        return $session;
+    }
+
     // ---------------------------------------------------------------- create
 
     /** @param array<string,mixed> $body */
     public function create(array $body, ?string $idempotencyKey): Response
     {
+        $bodyHash = hash('sha256', (string) json_encode($body));
         if ($idempotencyKey) {
-            $prior = $this->priorSessionForKey($idempotencyKey);
+            $prior = $this->sessions->findByIdempotencyKey($idempotencyKey, $this->idShop(), $this->agentFingerprint);
             if ($prior) {
+                if (!hash_equals((string) ($prior['idempotency_hash'] ?? ''), $bodyHash)) {
+                    return UcpError::response('idempotency_key_conflict', 'Idempotency-Key was already used with a different request', 409);
+                }
                 if ($pinError = $this->pinError($prior)) {
                     return $pinError;
                 }
@@ -100,7 +117,7 @@ final class CheckoutService
         $uid = self::uuid();
         $quote = $this->quote($uid, $totals, $currency);
 
-        $secret = bin2hex(random_bytes(32));
+        $issued = CapabilitySecret::issue();
         $now = date('Y-m-d H:i:s');
         $this->sessions->insert([
             'session_uid' => $uid,
@@ -112,8 +129,9 @@ final class CheckoutService
             'buyer' => $buyer ? json_encode($buyer) : null,
             'fulfillment' => $fulfillment ? json_encode($fulfillment) : null,
             'agent_fingerprint' => $this->agentFingerprint,
-            'session_secret_hash' => CapabilitySecret::digest($secret),
+            'session_secret_hash' => $issued['hash'],
             'idempotency_key' => $idempotencyKey,
+            'idempotency_hash' => $idempotencyKey ? $bodyHash : null,
             'ucp_version' => RequestContext::current()->sessionPin(),
             'created_at' => $now,
             'updated_at' => $now,
@@ -121,25 +139,20 @@ final class CheckoutService
 
         $session = $this->sessions->findByUid($uid, $this->idShop());
         $out = Formatter::checkoutSession($session, $this->registry);
-        // The capability secret is returned exactly once, at creation. The agent
-        // must store it and send it as `UCP-Session-Secret` on every later call.
-        $out['session_secret'] = $secret;
-        return Response::json(201, $out);
+
+        return Response::json(201, $out)->withHeader(CapabilitySecret::HEADER, $issued['secret']);
     }
 
     // ------------------------------------------------------------------- get
 
     public function get(string $uid): Response
     {
-        $session = $this->sessions->findByUid($uid, $this->idShop());
-        if (!$session) {
-            return UcpError::response('checkout_not_found', 'Checkout session not found', 404);
+        $session = $this->ownedSession($uid);
+        if ($session instanceof Response) {
+            return $session;
         }
         if ($pinError = $this->pinError($session)) {
             return $pinError;
-        }
-        if ($authError = $this->sessionAuthError($session)) {
-            return $authError;
         }
         return Response::json(200, Formatter::checkoutSession($session, $this->registry));
     }
@@ -149,15 +162,12 @@ final class CheckoutService
     /** @param array<string,mixed> $body */
     public function update(string $uid, array $body): Response
     {
-        $session = $this->sessions->findByUid($uid, $this->idShop());
-        if (!$session) {
-            return UcpError::response('checkout_not_found', 'Checkout session not found', 404);
+        $session = $this->ownedSession($uid);
+        if ($session instanceof Response) {
+            return $session;
         }
         if ($pinError = $this->pinError($session)) {
             return $pinError;
-        }
-        if ($authError = $this->sessionAuthError($session)) {
-            return $authError;
         }
         if (in_array($session['status'], ['canceled', 'completed', 'complete_in_progress', 'payment_pending', 'requires_escalation'], true)) {
             return UcpError::response('session_' . $session['status'], 'Session is ' . $session['status'], 409);
@@ -233,15 +243,12 @@ final class CheckoutService
 
     public function cancel(string $uid): Response
     {
-        $session = $this->sessions->findByUid($uid, $this->idShop());
-        if (!$session) {
-            return UcpError::response('checkout_not_found', 'Checkout session not found', 404);
+        $session = $this->ownedSession($uid);
+        if ($session instanceof Response) {
+            return $session;
         }
         if ($pinError = $this->pinError($session)) {
             return $pinError;
-        }
-        if ($authError = $this->sessionAuthError($session)) {
-            return $authError;
         }
         if ($session['status'] === 'completed') {
             return UcpError::response('session_completed', 'Cannot cancel a completed session', 409);
@@ -263,31 +270,24 @@ final class CheckoutService
     /** @param array<string,mixed> $body */
     public function complete(string $uid, array $body, ?string $idempotencyKey): Response
     {
+        $session = $this->ownedSession($uid);
+        if ($session instanceof Response) {
+            return $session;
+        }
+        if ($pinError = $this->pinError($session)) {
+            return $pinError;
+        }
         if ($idempotencyKey) {
-            $prior = $this->priorSessionForKey($idempotencyKey);
+            $prior = $this->sessions->findByIdempotencyKey($idempotencyKey, $this->idShop(), $this->agentFingerprint);
             if ($prior && ($prior['session_uid'] ?? '') !== $uid) {
                 return UcpError::response('idempotency_key_reused', 'This idempotency key is already bound to a different checkout session', 409);
             }
             if ($prior && $prior['status'] === 'completed' && !empty($prior['id_order'])) {
-                if ($pinError = $this->pinError($prior)) {
-                    return $pinError;
-                }
                 $order = new \Order((int) $prior['id_order']);
                 if (\Validate::isLoadedObject($order)) {
                     return Response::json(200, Formatter::completeResponse($prior, $order, $this->registry));
                 }
             }
-        }
-
-        $session = $this->sessions->findByUid($uid, $this->idShop());
-        if (!$session) {
-            return UcpError::response('checkout_not_found', 'Checkout session not found', 404);
-        }
-        if ($pinError = $this->pinError($session)) {
-            return $pinError;
-        }
-        if ($authError = $this->sessionAuthError($session)) {
-            return $authError;
         }
         if (in_array($session['status'], ['canceled', 'completed', 'requires_escalation'], true)) {
             return UcpError::response('session_' . $session['status'], 'Session is ' . $session['status'], 409);
@@ -521,20 +521,6 @@ final class CheckoutService
         return null;
     }
 
-    /**
-     * @return array<string,mixed>|null
-     */
-    private function priorSessionForKey(string $idempotencyKey): ?array
-    {
-        foreach ($this->sessions->findByIdempotencyKey($idempotencyKey, $this->idShop()) as $candidate) {
-            if (CapabilitySecret::holds((string) ($candidate['session_secret_hash'] ?? ''), $this->sessionSecret)) {
-                return $candidate;
-            }
-        }
-
-        return null;
-    }
-
     private function pinError(array $session): ?\FD\PrismUcp\Http\Response
     {
         return $this->pin?->check($session['ucp_version'] ?? null);
@@ -686,32 +672,6 @@ final class CheckoutService
             $buyer['last_name'] = (string) $raw['last_name'];
         }
         return $buyer === [] ? null : $buyer;
-    }
-
-    /**
-     * Authorization guard for an existing session: returns an error Response to
-     * send back, or null when the caller may proceed. Distinguishes "no secret
-     * supplied" — the common integration mistake, answered with an actionable
-     * message naming the header — from "wrong secret", a genuine ownership
-     * violation. Both are 403; the code/message is what tells them apart.
-     *
-     * @param array<string,mixed> $session
-     */
-    private function sessionAuthError(array $session): ?Response
-    {
-        $storedHash = (string) ($session['session_secret_hash'] ?? '');
-        switch (CapabilitySecret::classify($storedHash, $this->sessionSecret)) {
-            case CapabilitySecret::MISSING:
-                return UcpError::response(
-                    'session_secret_required',
-                    'This checkout session requires its capability secret. Send the `session_secret` from the create response as the `UCP-Session-Secret` request header.',
-                    403
-                );
-            case CapabilitySecret::MISMATCH:
-                return UcpError::response('session_ownership', 'Session belongs to a different agent', 403);
-            default:
-                return null;
-        }
     }
 
     private static function uuid(): string

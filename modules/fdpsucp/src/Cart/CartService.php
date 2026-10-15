@@ -42,6 +42,19 @@ final class CartService
         return (int) $this->context->shop->id;
     }
 
+    private function ownedCart(string $uid): array|Response
+    {
+        if ($this->sessionSecret === '') {
+            return UcpError::response('session_secret_required', 'Send the UCP-Session-Secret header returned when this cart was created', 401);
+        }
+        $cart = $this->carts->findByUid($uid, $this->idShop());
+        if (!$cart || !CapabilitySecret::holds((string) ($cart['cart_secret_hash'] ?? ''), $this->sessionSecret)) {
+            return UcpError::response('cart_not_found', 'Cart not found', 404);
+        }
+
+        return $cart;
+    }
+
     // ---------------------------------------------------------------- create
 
     /** @param array<string,mixed> $body */
@@ -58,14 +71,14 @@ final class CartService
         }
 
         $uid = self::uuid();
-        $secret = bin2hex(random_bytes(32));
+        $issued = CapabilitySecret::issue();
         $now = date('Y-m-d H:i:s');
         $this->carts->insert([
             'cart_uid' => $uid,
             'id_shop' => $this->idShop(),
             'line_items' => json_encode($formatted),
             'agent_fingerprint' => $this->agentFingerprint,
-            'cart_secret_hash' => CapabilitySecret::digest($secret),
+            'cart_secret_hash' => $issued['hash'],
             'ucp_version' => RequestContext::current()->sessionPin(),
             'created_at' => $now,
             'updated_at' => $now,
@@ -74,25 +87,20 @@ final class CartService
         $cart = $this->carts->findByUid($uid, $this->idShop());
 
         $out = $this->formatCart($cart);
-        // Returned once at creation; required as `UCP-Session-Secret` thereafter.
-        $out['cart_secret'] = $secret;
 
-        return Response::json(201, $out);
+        return Response::json(201, $out)->withHeader(CapabilitySecret::HEADER, $issued['secret']);
     }
 
     // ------------------------------------------------------------------- get
 
     public function get(string $uid): Response
     {
-        $cart = $this->carts->findByUid($uid, $this->idShop());
-        if (!$cart) {
-            return UcpError::response('cart_not_found', 'Cart not found', 404);
+        $cart = $this->ownedCart($uid);
+        if ($cart instanceof Response) {
+            return $cart;
         }
         if ($pinError = $this->pin?->check($cart['ucp_version'] ?? null)) {
             return $pinError;
-        }
-        if ($authError = $this->cartAuthError($cart)) {
-            return $authError;
         }
 
         return Response::json(200, $this->formatCart($cart));
@@ -103,15 +111,12 @@ final class CartService
     /** @param array<string,mixed> $body */
     public function update(string $uid, array $body): Response
     {
-        $cart = $this->carts->findByUid($uid, $this->idShop());
-        if (!$cart) {
-            return UcpError::response('cart_not_found', 'Cart not found', 404);
+        $cart = $this->ownedCart($uid);
+        if ($cart instanceof Response) {
+            return $cart;
         }
         if ($pinError = $this->pin?->check($cart['ucp_version'] ?? null)) {
             return $pinError;
-        }
-        if ($authError = $this->cartAuthError($cart)) {
-            return $authError;
         }
 
         $lineItems = $body['line_items'] ?? null;
@@ -137,15 +142,12 @@ final class CartService
 
     public function delete(string $uid): Response
     {
-        $cart = $this->carts->findByUid($uid, $this->idShop());
-        if (!$cart) {
-            return UcpError::response('cart_not_found', 'Cart not found', 404);
+        $cart = $this->ownedCart($uid);
+        if ($cart instanceof Response) {
+            return $cart;
         }
         if ($pinError = $this->pin?->check($cart['ucp_version'] ?? null)) {
             return $pinError;
-        }
-        if ($authError = $this->cartAuthError($cart)) {
-            return $authError;
         }
 
         $this->carts->delete($uid, $this->idShop());
@@ -168,15 +170,12 @@ final class CartService
      */
     public function checkout(string $uid, ?string $idempotencyKey): Response
     {
-        $cart = $this->carts->findByUid($uid, $this->idShop());
-        if (!$cart) {
-            return UcpError::response('cart_not_found', 'Cart not found', 404);
+        $cart = $this->ownedCart($uid);
+        if ($cart instanceof Response) {
+            return $cart;
         }
         if ($pinError = $this->pin?->check($cart['ucp_version'] ?? null)) {
             return $pinError;
-        }
-        if ($authError = $this->cartAuthError($cart)) {
-            return $authError;
         }
 
         $stored = json_decode($cart['line_items'] ?? '[]', true) ?: [];
@@ -244,32 +243,6 @@ final class CartService
             ],
             'messages' => [],
         ];
-    }
-
-    /**
-     * Authorization guard for an existing cart: returns an error Response to send
-     * back, or null when the caller may proceed. Distinguishes "no secret
-     * supplied" — answered with an actionable message naming the header — from
-     * "wrong secret". Both are 403; the code/message tells them apart. The secret
-     * may arrive as `UCP-Cart-Secret` or `UCP-Session-Secret` (see Router).
-     *
-     * @param array<string,mixed> $cart
-     */
-    private function cartAuthError(array $cart): ?Response
-    {
-        $storedHash = (string) ($cart['cart_secret_hash'] ?? '');
-        switch (CapabilitySecret::classify($storedHash, $this->sessionSecret)) {
-            case CapabilitySecret::MISSING:
-                return UcpError::response(
-                    'cart_secret_required',
-                    'This cart requires its capability secret. Send the `cart_secret` from the create response as the `UCP-Cart-Secret` (or `UCP-Session-Secret`) request header.',
-                    403
-                );
-            case CapabilitySecret::MISMATCH:
-                return UcpError::response('cart_ownership', 'Cart belongs to a different agent', 403);
-            default:
-                return null;
-        }
     }
 
     private static function uuid(): string

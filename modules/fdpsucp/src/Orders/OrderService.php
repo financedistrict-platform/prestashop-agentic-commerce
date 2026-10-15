@@ -23,9 +23,12 @@ final class OrderService
 
     public function get(int $idOrder): Response
     {
+        if ($this->sessionSecret === '') {
+            return UcpError::response('session_secret_required', 'Send the UCP-Session-Secret header returned when the checkout session was created', 401);
+        }
+
         $idShop = (int) $this->context->shop->id;
 
-        // Order must exist, belong to this shop, and have been placed via UCP.
         $row = \Db::getInstance()->getRow(
             'SELECT `id_order`, `session_secret_hash` FROM `' . _DB_PREFIX_ . 'prism_session`
              WHERE `id_order` = ' . (int) $idOrder . ' AND `id_shop` = ' . $idShop
@@ -34,12 +37,8 @@ final class OrderService
             return UcpError::response('order_not_found', 'Order not found', 404);
         }
 
-        // Only the agent that owns the originating session (capability-secret
-        // holder) may read the order. A generic 404 avoids confirming existence
-        // to a non-owner — so both a missing and a wrong secret map to 404 here,
-        // unlike the cart/session endpoints which distinguish the two.
         $storedHash = (string) ($row['session_secret_hash'] ?? '');
-        if (!CapabilitySecret::authorizes($storedHash, $this->sessionSecret)) {
+        if (!CapabilitySecret::holds($storedHash, $this->sessionSecret)) {
             return UcpError::response('order_not_found', 'Order not found', 404);
         }
 

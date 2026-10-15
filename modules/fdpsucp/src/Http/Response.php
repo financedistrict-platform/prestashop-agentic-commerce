@@ -15,12 +15,21 @@ final class Response
     public int $status;
     /** @var array<string,mixed> */
     public array $body;
+    /** @var array<string,string> */
+    public array $headers = [];
 
     /** @param array<string,mixed> $body */
     public function __construct(int $status, array $body)
     {
         $this->status = $status;
         $this->body = $body;
+    }
+
+    public function withHeader(string $name, string $value): self
+    {
+        $this->headers[$name] = $value;
+
+        return $this;
     }
 
     /** @param array<string,mixed> $body */
