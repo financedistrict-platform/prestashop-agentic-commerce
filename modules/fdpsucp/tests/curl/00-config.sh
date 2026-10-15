@@ -18,10 +18,13 @@ if [ -n "${UCP_TOKEN:-}" ]; then
 fi
 
 # Per-resource capability secret. Creating a cart or checkout session returns a
-# one-time secret in the response body (cart_secret / session_secret). Export it
-# — the create scripts print the exact command — so every later call to that
-# resource authorizes. Sent here as UCP-Session-Secret, which the module accepts
-# for both carts and sessions (UCP-Cart-Secret is an accepted alias for carts).
+# one-time secret in the UCP-Session-Secret response header. Export it as
+# UCP_SECRET (the create scripts print the exact command) so every later call to
+# that resource authorizes.
+header_secret() {
+  tr -d '\r' < "$1" | awk -F': ' 'tolower($1)=="ucp-session-secret"{print $2}'
+}
+
 SECRET_HEADER=()
 if [ -n "${UCP_SECRET:-}" ]; then
   SECRET_HEADER=(-H "UCP-Session-Secret: $UCP_SECRET")

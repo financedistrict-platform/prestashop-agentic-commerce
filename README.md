@@ -191,24 +191,17 @@ Authorization: Bearer <token>
 
 Discovery (`/.well-known/ucp`) stays reachable so agents can find the store. If `FDPSUCP_AGENT_TOKEN` is empty, every shopping endpoint answers `401` until a token is generated, so an empty token never opens the API. Regenerating the token immediately invalidates the old one.
 
-**2. Session secret (which session is yours).** Creating a cart or checkout session returns a one-time secret in the response body — `cart_secret` for a cart, `session_secret` for a checkout session. **Store it and send it back on every later call to that resource**, or the call is rejected:
-
-```
-UCP-Session-Secret: <secret>     # checkout sessions (and, accepted, carts)
-UCP-Cart-Secret:    <secret>     # carts — alias matching the cart_secret field
-```
-
-Round-trip:
+**2. Session secret (which cart or session is yours).** `POST /carts`, `POST /checkout-sessions` and `POST /carts/{id}/checkout` answer `201` with a one-time `UCP-Session-Secret` response header. The body never contains it. Store it and send it as the `UCP-Session-Secret` request header on every later call to that resource:
 
 | Step | Call | Secret to send | Secret returned |
-|------|------|----------------|-----------------|
-| Create cart | `POST /carts` | — | `cart_secret` |
-| Get / update / checkout cart | `… /carts/{id}[/checkout]` | the `cart_secret` | (checkout ⇒ a new `session_secret`) |
-| Create session | `POST /checkout-sessions` | — | `session_secret` |
-| Update / complete session | `… /checkout-sessions/{id}[/complete]` | the `session_secret` | — |
-| Read the order | `GET /orders/{id}` | the originating `session_secret` | — |
+|---|---|---|---|
+| Create cart | `POST /carts` | — | header (cart secret) |
+| Get / update / delete / checkout cart | `… /carts/{id}[/checkout]` | the cart secret | checkout ⇒ header with a new session secret |
+| Create session | `POST /checkout-sessions` | — | header (session secret) |
+| Get / update / cancel / complete session | `… /checkout-sessions/{id}[/…]` | the session secret | — |
+| Read the order | `GET /orders/{id}` | the session secret of the session that placed it | — |
 
-The secret is never echoed again after creation, so it can't be lifted from a later response. Omitting it returns **`403 session_secret_required`** / **`cart_secret_required`** (a clear "you forgot the header"); sending the *wrong* one returns **`403 session_ownership`** / **`cart_ownership`**. The order read instead returns **`404`** when the secret is missing or wrong, to avoid confirming the order exists to a non-owner. This is what keeps one agent from reading or completing another's session even when they share the same agent token. All endpoints require HTTPS.
+Without the header the answer is `401 session_secret_required`. With a wrong secret, for a resource created without one, or for an unknown id it is `404` (`cart_not_found`, `checkout_not_found`, `order_not_found`). The secret is checked before the version pin. A replayed create with the same `Idempotency-Key` and body from the same agent returns the stored session (`200`) without the header; another body gets `409 idempotency_key_conflict`. URLs in responses carry ids only. After upgrading from an earlier version, run the module upgrade (Module Manager → Upgrade) so the session table gets its idempotency column; sessions and carts created before the upgrade answer `404`. All endpoints require HTTPS.
 
 ### Prism Console Setup
 

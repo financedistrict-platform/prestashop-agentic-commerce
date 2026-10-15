@@ -43,24 +43,21 @@ class SessionRepository
         return $row ?: null;
     }
 
-    /**
-     * Every session of a shop bound to an idempotency key (NFR-3). Keys are
-     * chosen by callers, so several holders may share one; ownership is decided
-     * by the caller of this method, never by the key.
-     *
-     * @return array<int,array<string,mixed>>
-     */
-    public function findByIdempotencyKey(string $key, int $idShop): array
+    /** @return array<string,mixed>|null */
+    public function findByIdempotencyKey(string $key, int $idShop, string $fingerprint): ?array
     {
         if ($key === '') {
-            return [];
+            return null;
         }
         $sql = 'SELECT * FROM `' . $this->table . '`
                 WHERE `idempotency_key` = "' . pSQL($key, true) . '"
+                AND `agent_fingerprint` = "' . pSQL($fingerprint) . '"
                 AND `id_shop` = ' . (int) $idShop . '
-                ORDER BY `id_prism_session` ASC';
-        $rows = \Db::getInstance()->executeS($sql);
-        return is_array($rows) ? $rows : [];
+                ORDER BY `id_prism_session` ASC
+                LIMIT 1';
+        $row = \Db::getInstance()->getRow($sql);
+
+        return $row ?: null;
     }
 
     /**

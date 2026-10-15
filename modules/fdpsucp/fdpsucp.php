@@ -22,7 +22,7 @@ class FdPsUcp extends Module
 {
     public const UCP_VERSION = VersionRegistry::DEFAULT_CURRENT;
 
-    public const VERSION = '0.7.6';
+    public const VERSION = '0.7.11';
 
     public function __construct()
     {
@@ -325,6 +325,7 @@ class FdPsUcp extends Module
             `agent_fingerprint` VARCHAR(128) NULL,
             `session_secret_hash` VARCHAR(64) NULL,
             `idempotency_key` VARCHAR(128) NULL,
+            `idempotency_hash` CHAR(64) NULL,
             `ucp_version` VARCHAR(10) NULL,
             `created_at` DATETIME NOT NULL,
             `updated_at` DATETIME NULL,

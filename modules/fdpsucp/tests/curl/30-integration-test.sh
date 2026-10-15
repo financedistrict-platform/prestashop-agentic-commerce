@@ -17,15 +17,22 @@ skip() { echo "  - $1 (skipped)"; SKIP=$((SKIP + 1)); }
 
 # jval <json> <python-expression on `d`>  -> prints value or empty on error
 jval() { echo "$1" | "$PY" -c "import json,sys; d=json.load(sys.stdin); print($2)" 2>/dev/null || true; }
-# http_status METHOD URL [data] -> prints numeric status
+# http_status METHOD URL [data] [secret] -> prints numeric status
 http_status() {
-  local m="$1" url="$2" data="${3:-}"
+  local m="$1" url="$2" data="${3:-}" secret="${4:-}"
+  local args=("${AUTH[@]}")
+  if [ -n "$secret" ]; then
+    args+=(-H "UCP-Session-Secret: $secret")
+  fi
   if [ -n "$data" ]; then
-    curl -s -o /dev/null -w '%{http_code}' "${AUTH[@]}" -X "$m" "$url" -H 'Content-Type: application/json' -d "$data"
+    curl -s -o /dev/null -w '%{http_code}' "${args[@]}" -X "$m" "$url" -H 'Content-Type: application/json' -d "$data"
   else
-    curl -s -o /dev/null -w '%{http_code}' "${AUTH[@]}" -X "$m" "$url"
+    curl -s -o /dev/null -w '%{http_code}' "${args[@]}" -X "$m" "$url"
   fi
 }
+
+HDR=$(mktemp)
+trap 'rm -f "$HDR"' EXIT
 
 echo "========================================"
 echo "  UCP Integration Test Suite"
@@ -70,15 +77,29 @@ echo ""; echo "3. Checkout journey (dummy handler)"
 if [ -z "$PRODUCT_ID" ]; then
   skip "checkout journey (no product)"
 else
-  CREATE=$(curl -s "${AUTH[@]}" -X POST "$UCP_API/checkout-sessions" -H 'Content-Type: application/json' \
+  CREATE=$(curl -s -D "$HDR" "${AUTH[@]}" -X POST "$UCP_API/checkout-sessions" -H 'Content-Type: application/json' \
     -d "{\"line_items\":[{\"item\":{\"id\":\"$PRODUCT_ID\"},\"quantity\":1}]}")
   SID=$(jval "$CREATE" "d['id']")
   ST=$(jval "$CREATE" "d['status']")
+  SECRET=$(header_secret "$HDR" || true)
   [ -n "$SID" ] && pass "session created (id=$SID)" || fail "session create" "$CREATE"
   [ "$ST" = "incomplete" ] && pass "new session is incomplete" || fail "new session status" "got '$ST'"
+  [ -n "$SECRET" ] && pass "session create returns the UCP-Session-Secret header" || fail "session secret header" "missing"
+  if [ -n "$SECRET" ]; then
+    case "$CREATE" in
+      *"$SECRET"*) fail "session secret in body" "the secret must only travel in the header" ;;
+      *) pass "session body does not contain the secret" ;;
+    esac
+  fi
+  SH=(-H "UCP-Session-Secret: $SECRET")
 
   if [ -n "$SID" ]; then
-    UPD=$(curl -s "${AUTH[@]}" -X PUT "$UCP_API/checkout-sessions/$SID" -H 'Content-Type: application/json' -d '{
+    NOH=$(http_status GET "$UCP_API/checkout-sessions/$SID")
+    [ "$NOH" = "401" ] && pass "session GET without the secret -> 401" || fail "session GET without secret" "status $NOH"
+    BADH=$(http_status GET "$UCP_API/checkout-sessions/$SID" "" "wrong-secret")
+    [ "$BADH" = "404" ] && pass "session GET with a wrong secret -> 404" || fail "session GET with wrong secret" "status $BADH"
+
+    UPD=$(curl -s "${AUTH[@]}" "${SH[@]}" -X PUT "$UCP_API/checkout-sessions/$SID" -H 'Content-Type: application/json' -d '{
       "buyer":{"email":"test@example.com","first_name":"Test","last_name":"Agent"},
       "fulfillment":{"methods":[{"type":"shipping","destinations":[{"street_address":"1 Market St","address_locality":"San Francisco","address_region":"CA","postal_code":"94105","address_country":"US"}]}]}
     }')
@@ -88,10 +109,10 @@ else
       *) fail "session update" "unexpected status '$UST'" ;;
     esac
 
-    GST=$(http_status GET "$UCP_API/checkout-sessions/$SID")
+    GST=$(http_status GET "$UCP_API/checkout-sessions/$SID" "" "$SECRET")
     [ "$GST" = "200" ] && pass "session GET 200" || fail "session GET" "status $GST"
 
-    COMP=$(curl -s "${AUTH[@]}" -X POST "$UCP_API/checkout-sessions/$SID/complete" -H 'Content-Type: application/json' \
+    COMP=$(curl -s "${AUTH[@]}" "${SH[@]}" -X POST "$UCP_API/checkout-sessions/$SID/complete" -H 'Content-Type: application/json' \
       -d '{"payment":{"instruments":[{"id":"inst_1","handler_id":"dummy","type":"dummy","credential":{"type":"dummy"}}]}}')
     CST=$(jval "$COMP" "d['status']")
     OID=$(jval "$COMP" "d.get('order',{}).get('id','')")
@@ -99,7 +120,9 @@ else
     [ -n "$OID" ] && pass "complete returns an order id ($OID)" || fail "order id" "missing"
 
     if [ -n "$OID" ]; then
-      ORD=$(curl -s "${AUTH[@]}" "$UCP_API/orders/$OID")
+      OSTATUS=$(http_status GET "$UCP_API/orders/$OID")
+      [ "$OSTATUS" = "401" ] && pass "order GET without the secret -> 401" || fail "order GET without secret" "status $OSTATUS"
+      ORD=$(curl -s "${AUTH[@]}" "${SH[@]}" "$UCP_API/orders/$OID")
       RID=$(jval "$ORD" "d['id']")
       [ "$RID" = "$OID" ] && pass "order GET resolves the placed order" || fail "order GET" "got '$RID'"
     else
@@ -113,22 +136,32 @@ echo ""; echo "4. Cart journey"
 if [ -z "$PRODUCT_ID" ]; then
   skip "cart journey (no product)"
 else
-  CART=$(curl -s "${AUTH[@]}" -X POST "$UCP_API/carts" -H 'Content-Type: application/json' \
+  CART=$(curl -s -D "$HDR" "${AUTH[@]}" -X POST "$UCP_API/carts" -H 'Content-Type: application/json' \
     -d "{\"line_items\":[{\"item\":{\"id\":\"$PRODUCT_ID\"},\"quantity\":2}]}")
   CID=$(jval "$CART" "d['id']")
+  CART_SECRET=$(header_secret "$HDR" || true)
   [ -n "$CID" ] && pass "cart created (id=$CID)" || fail "cart create" "$CART"
+  [ -n "$CART_SECRET" ] && pass "cart create returns the UCP-Session-Secret header" || fail "cart secret header" "missing"
   if [ -n "$CID" ]; then
-    CGST=$(http_status GET "$UCP_API/carts/$CID")
+    CNOH=$(http_status GET "$UCP_API/carts/$CID")
+    [ "$CNOH" = "401" ] && pass "cart GET without the secret -> 401" || fail "cart GET without secret" "status $CNOH"
+    CGST=$(http_status GET "$UCP_API/carts/$CID" "" "$CART_SECRET")
     [ "$CGST" = "200" ] && pass "cart GET 200" || fail "cart GET" "status $CGST"
-    CO=$(curl -s "${AUTH[@]}" -X POST "$UCP_API/carts/$CID/checkout" -H 'Content-Type: application/json')
+    CO=$(curl -s -D "$HDR" "${AUTH[@]}" -H "UCP-Session-Secret: $CART_SECRET" -X POST "$UCP_API/carts/$CID/checkout" -H 'Content-Type: application/json')
     CSID=$(jval "$CO" "d['id']")
+    NEW_SECRET=$(header_secret "$HDR" || true)
     [ -n "$CSID" ] && pass "cart -> checkout session ($CSID)" || fail "cart checkout" "$CO"
+    if [ -n "$NEW_SECRET" ] && [ "$NEW_SECRET" != "$CART_SECRET" ]; then
+      pass "cart checkout issues a new session secret"
+    else
+      fail "cart checkout secret" "expected a new UCP-Session-Secret header"
+    fi
   fi
 fi
 
 # ── 5. Error handling ─────────────────────────────────────────
 echo ""; echo "5. Error handling"
-NF=$(http_status GET "$UCP_API/checkout-sessions/does-not-exist")
+NF=$(http_status GET "$UCP_API/checkout-sessions/does-not-exist" "" "any-secret")
 [ "$NF" = "404" ] && pass "unknown session -> 404" || fail "unknown session" "status $NF"
 BAD=$(http_status POST "$UCP_API/checkout-sessions" '{"line_items":[{"item":{"id":"99999999"},"quantity":1}]}')
 case "$BAD" in

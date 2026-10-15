@@ -15,6 +15,8 @@ PASS=0; FAIL=0
 pass() { echo "  [ok] $1"; PASS=$((PASS + 1)); }
 fail() { echo "  [XX] $1: ${2:-}"; FAIL=$((FAIL + 1)); }
 jval() { echo "$1" | "$PY" -c "import json,sys; d=json.load(sys.stdin); print($2)" 2>/dev/null || true; }
+HDR=$(mktemp)
+trap 'rm -f "$HDR"' EXIT
 
 echo "========================================"
 echo "  Prism integration (no settlement)"
@@ -36,15 +38,22 @@ PID=$(jval "$(curl -s "${AUTH[@]}" -X POST "$UCP_API/catalog/search" -H 'Content
 [ -n "$PID" ] && pass "catalog has a product ($PID)" || fail "catalog product" "none"
 
 # 2. Create session -> Prism quote embedded in payment_handlers
-CREATE=$(curl -s "${AUTH[@]}" -X POST "$UCP_API/checkout-sessions" -H 'Content-Type: application/json' \
+CREATE=$(curl -s -D "$HDR" "${AUTH[@]}" -X POST "$UCP_API/checkout-sessions" -H 'Content-Type: application/json' \
   -d "{\"line_items\":[{\"item\":{\"id\":\"$PID\"},\"quantity\":1}]}")
 SID=$(jval "$CREATE" "d['id']")
+SECRET=$(header_secret "$HDR" || true)
+SH=(-H "UCP-Session-Secret: $SECRET")
 [ -n "$SID" ] && pass "session created ($SID)" || fail "session create" "$CREATE"
+[ -n "$SECRET" ] && pass "session create returns the UCP-Session-Secret header" || fail "session secret header" "missing"
+NOH=$(curl -s -o /dev/null -w '%{http_code}' "${AUTH[@]}" "$UCP_API/checkout-sessions/$SID")
+[ "$NOH" = "401" ] && pass "session GET without the secret -> 401" || fail "session GET without secret" "status $NOH"
+BADH=$(curl -s -o /dev/null -w '%{http_code}' "${AUTH[@]}" -H "UCP-Session-Secret: wrong-secret" "$UCP_API/checkout-sessions/$SID")
+[ "$BADH" = "404" ] && pass "session GET with a wrong secret -> 404" || fail "session GET with wrong secret" "status $BADH"
 [ "$(jval "$CREATE" "'xyz.fd.prism_payment' in d.get('ucp',{}).get('payment_handlers',{})")" = "True" ] \
   && pass "session embeds the Prism quote (payment_handlers)" || fail "prism quote" "not embedded in session"
 
 # 3. Update buyer + shipping -> ready_for_complete
-UPD=$(curl -s "${AUTH[@]}" -X PUT "$UCP_API/checkout-sessions/$SID" -H 'Content-Type: application/json' -d '{
+UPD=$(curl -s "${AUTH[@]}" "${SH[@]}" -X PUT "$UCP_API/checkout-sessions/$SID" -H 'Content-Type: application/json' -d '{
   "buyer":{"email":"test@example.com","first_name":"Test","last_name":"Agent"},
   "fulfillment":{"methods":[{"type":"shipping","destinations":[{"street_address":"1 Market St","address_locality":"San Francisco","address_region":"CA","postal_code":"94105","address_country":"US"}]}]}
 }')
@@ -52,7 +61,7 @@ ST=$(jval "$UPD" "d['status']")
 [ "$ST" = "ready_for_complete" ] && pass "status ready_for_complete" || fail "status" "got '$ST' (settlement would need a wallet-signed credential)"
 
 # 4. Cancel -> payment handlers removed
-CST=$(jval "$(curl -s "${AUTH[@]}" -X POST "$UCP_API/checkout-sessions/$SID/cancel" -H 'Content-Type: application/json')" "d['status']")
+CST=$(jval "$(curl -s "${AUTH[@]}" "${SH[@]}" -X POST "$UCP_API/checkout-sessions/$SID/cancel" -H 'Content-Type: application/json')" "d['status']")
 [ "$CST" = "canceled" ] && pass "session canceled" || fail "cancel" "got '$CST'"
 
 echo ""

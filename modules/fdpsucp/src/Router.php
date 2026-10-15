@@ -44,16 +44,7 @@ final class Router
         $method = strtoupper($method);
         $idempotencyKey = $headers['idempotency-key'] ?? null;
 
-        // Per-resource capability secret: minted at create, returned once, and
-        // required on every later read/mutation. This — not the spoofable
-        // UCP-Agent header — is what makes a session/cart private to its creator.
-        //
-        // Accept either header name: `UCP-Session-Secret` (checkout sessions,
-        // returned as `session_secret`) or `UCP-Cart-Secret` (carts, returned as
-        // `cart_secret`). Same value space; the hash check validates it. Reading
-        // both means the header name matches the field name the caller was given,
-        // instead of forcing a cart's `cart_secret` into a `*-Session-*` header.
-        $sessionSecret = (string) ($headers['ucp-session-secret'] ?? $headers['ucp-cart-secret'] ?? '');
+        $sessionSecret = trim((string) ($headers['ucp-session-secret'] ?? ''));
 
         $versions = $this->resolver?->versions() ?? VersionRegistry::fromConfiguration();
         RequestContext::set(new RequestContext($versions, $versions->currentWire()->version()));

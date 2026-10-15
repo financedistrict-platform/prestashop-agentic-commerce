@@ -76,6 +76,8 @@ class Db
     public static ?PDO $pdo = null;
     public static int $affected = 0;
     public static bool $failing = false;
+    public static ?array $row = null;
+    public static array $inserted = [];
 
     public static function getInstance(): self
     {
@@ -100,6 +102,18 @@ class Db
     public function executeS($sql): array
     {
         return [['Field' => 'ucp_version']];
+    }
+
+    public function getRow($sql)
+    {
+        return self::$row;
+    }
+
+    public function insert($table, $data): bool
+    {
+        self::$inserted[] = ['table' => $table, 'data' => $data];
+
+        return true;
     }
 
     public function getValue($sql)
@@ -481,7 +495,9 @@ class Cart
     {
         $carrier = $this->deliveryOption === null ? null : (int) reset($this->deliveryOption);
 
-        return ($this->carrierTotals[$carrier] ?? $this->orderTotals)[$type] ?? 0.0;
+        $totals = $carrier === null ? $this->orderTotals : ($this->carrierTotals[$carrier] ?? $this->orderTotals);
+
+        return $totals[$type] ?? 0.0;
     }
 
     public function setDeliveryOption($deliveryOption = null)
@@ -536,6 +552,8 @@ final class FdTestStubs
         Db::$pdo = null;
         Db::$affected = 0;
         Db::$failing = false;
+        Db::$row = null;
+        Db::$inserted = [];
         Product::$prices = [];
         Currency::$deleted = [];
         Currency::$inactive = [];
