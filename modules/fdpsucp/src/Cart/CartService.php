@@ -212,15 +212,18 @@ final class CartService
         if ($response->status >= 300) {
             \PrestaShopLogger::addLog('[FD UCP] Cart checkout failed after the cart was claimed: HTTP ' . $response->status . ' ' . json_encode($response->body['messages'] ?? null), 3);
 
-            return self::checkoutFailed();
+            return self::checkoutFailed(is_array($response->body['messages'] ?? null) ? $response->body['messages'] : []);
         }
 
         return $response;
     }
 
-    private static function checkoutFailed(): Response
+    private static function checkoutFailed(array $causes = []): Response
     {
-        return UcpError::response('cart_checkout_failed', 'The cart was used up but no checkout session was created. Build a new cart.', 500);
+        $response = UcpError::response('cart_checkout_failed', 'The cart was used up but no checkout session was created. Build a new cart.', 500);
+        $response->body['messages'] = array_merge($response->body['messages'] ?? [], $causes);
+
+        return $response;
     }
 
     // --------------------------------------------------------------- helpers

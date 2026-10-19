@@ -87,6 +87,7 @@ final class CartCheckoutClaimTest extends TestCase
 
         $this->assertSame(500, $response->status, (string) json_encode($response->body));
         $this->assertSame('cart_checkout_failed', $response->body['messages'][0]['code']);
+        $this->assertGreaterThan(1, count($response->body['messages']));
         $this->assertSame(0, self::sessionsCreated());
         $this->assertTrue($this->carts->claimed[self::CART_ID] ?? false);
     }
