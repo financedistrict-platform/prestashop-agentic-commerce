@@ -377,4 +377,14 @@ final class FdTestOwnedCarts extends CartRepository
 
         return true;
     }
+
+    public function claim(string $id, int $idShop): bool
+    {
+        if (!isset($this->rows[$id])) {
+            return false;
+        }
+        unset($this->rows[$id]);
+
+        return true;
+    }
 }

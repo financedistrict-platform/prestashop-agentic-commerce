@@ -64,6 +64,17 @@ class CartRepository
         );
     }
 
+    public function claim(string $id, int $idShop): bool
+    {
+        \Db::getInstance()->execute(
+            'DELETE FROM `' . $this->table . '`
+             WHERE `cart_uid` = "' . pSQL($id) . '"
+             AND `id_shop` = ' . (int) $idShop
+        );
+
+        return \Db::getInstance()->Affected_Rows() === 1;
+    }
+
     /**
      * @param array<string,mixed> $data
      * @return array<string,mixed>

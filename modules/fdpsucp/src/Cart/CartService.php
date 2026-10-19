@@ -162,12 +162,6 @@ final class CartService
 
     // -------------------------------------------------------------- checkout
 
-    /**
-     * Convert the cart into a checkout session. Delegates to CheckoutService so
-     * pricing, fulfillment and payment-handler preparation follow the single
-     * canonical session-creation path; the cart is discarded once the session
-     * exists. The agent continues against /checkout-sessions/{id}.
-     */
     public function checkout(string $uid, ?string $idempotencyKey): Response
     {
         $cart = $this->ownedCart($uid);
@@ -196,6 +190,10 @@ final class CartService
             $sessionLineItems[] = $entry;
         }
 
+        if (!$this->carts->claim($uid, $this->idShop())) {
+            return UcpError::response('cart_already_checked_out', 'This cart was already checked out', 409);
+        }
+
         $checkout = new CheckoutService(
             $this->context,
             $this->registry,
@@ -204,14 +202,25 @@ final class CartService
             '',
             $this->pin
         );
-        $response = $checkout->create(['line_items' => $sessionLineItems], $idempotencyKey);
+        try {
+            $response = $checkout->create(['line_items' => $sessionLineItems], $idempotencyKey);
+        } catch (\Throwable $e) {
+            \PrestaShopLogger::addLog('[FD UCP] Cart checkout failed after the cart was claimed: ' . $e->getMessage(), 3);
 
-        // Only discard the cart once the session was actually created.
-        if ($response->status === 201) {
-            $this->carts->delete($uid, $this->idShop());
+            return self::checkoutFailed();
+        }
+        if ($response->status >= 300) {
+            \PrestaShopLogger::addLog('[FD UCP] Cart checkout failed after the cart was claimed: HTTP ' . $response->status . ' ' . json_encode($response->body['messages'] ?? null), 3);
+
+            return self::checkoutFailed();
         }
 
         return $response;
+    }
+
+    private static function checkoutFailed(): Response
+    {
+        return UcpError::response('cart_checkout_failed', 'The cart was used up but no checkout session was created. Build a new cart.', 500);
     }
 
     // --------------------------------------------------------------- helpers
