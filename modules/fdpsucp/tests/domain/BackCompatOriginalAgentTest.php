@@ -218,8 +218,24 @@ final class FdTestCartBuilder extends CartBuilder
 
 final class FdTestMemorySessions extends SessionRepository
 {
+    public ?string $statusBeforeCancel = null;
+
     public function __construct(public array $rows)
     {
+    }
+
+    public function cancelIfIncomplete(string $uid, int $idShop): bool
+    {
+        if ($this->statusBeforeCancel !== null && isset($this->rows[$uid])) {
+            $this->rows[$uid]['status'] = $this->statusBeforeCancel;
+        }
+        if (($this->rows[$uid]['status'] ?? '') !== 'incomplete') {
+            return false;
+        }
+        $this->rows[$uid]['status'] = 'canceled';
+        $this->rows[$uid]['updated_at'] = date('Y-m-d H:i:s');
+
+        return true;
     }
 
     public function insert(array $data): bool

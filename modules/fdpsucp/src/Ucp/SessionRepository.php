@@ -90,6 +90,18 @@ class SessionRepository
         return \Db::getInstance()->Affected_Rows() === 1;
     }
 
+    public function cancelIfIncomplete(string $uid, int $idShop): bool
+    {
+        $sql = 'UPDATE `' . $this->table . '`
+                SET `status` = "canceled", `updated_at` = "' . pSQL(date('Y-m-d H:i:s')) . '"
+                WHERE `session_uid` = "' . pSQL($uid) . '"
+                AND `id_shop` = ' . (int) $idShop . '
+                AND `status` = "incomplete"';
+        \Db::getInstance()->execute($sql);
+
+        return \Db::getInstance()->Affected_Rows() === 1;
+    }
+
     /** @param array<string,mixed> $session */
     public static function claimAbandoned(array $session): bool
     {

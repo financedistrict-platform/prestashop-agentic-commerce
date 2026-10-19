@@ -250,18 +250,14 @@ final class CheckoutService
         if ($pinError = $this->pinError($session)) {
             return $pinError;
         }
-        if ($session['status'] === 'completed') {
-            return UcpError::response('session_completed', 'Cannot cancel a completed session', 409);
-        }
-        if (in_array($session['status'], ['payment_pending', 'requires_escalation'], true)) {
-            return UcpError::response('session_' . $session['status'], 'Session is ' . $session['status'], 409);
+        if (!$this->sessions->cancelIfIncomplete($uid, $this->idShop())) {
+            $status = UcpStatus::resolve($this->sessions->findByUid($uid, $this->idShop()) ?? $session);
+
+            return UcpError::response('session_' . $status, 'Session is ' . $status, 409);
         }
 
-        $this->sessions->update($uid, $this->idShop(), [
-            'status' => 'canceled',
-            'updated_at' => date('Y-m-d H:i:s'),
-        ]);
-        $session['status'] = 'canceled';
+        $session = $this->sessions->findByUid($uid, $this->idShop()) ?? ['status' => 'canceled'] + $session;
+
         return Response::json(200, Formatter::checkoutSession($session, $this->registry));
     }
 

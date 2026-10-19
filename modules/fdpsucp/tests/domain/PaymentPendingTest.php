@@ -159,6 +159,52 @@ final class PaymentPendingTest extends TestCase
         $this->assertSame('payment_pending', $this->row()['status']);
     }
 
+    #[DataProvider('statusesThatRefuseCancel')]
+    public function test_cancel_is_refused_with_the_ucp_status_code(string $status, string $code): void
+    {
+        $this->sessions->rows[self::SESSION_ID]['status'] = $status;
+
+        $response = $this->service()->cancel(self::SESSION_ID);
+
+        $this->assertSame(409, $response->status, (string) json_encode($response->body));
+        $this->assertSame($code, $response->body['messages'][0]['code']);
+        $this->assertSame($status, $this->row()['status']);
+    }
+
+    public static function statusesThatRefuseCancel(): array
+    {
+        return [
+            'complete_in_progress' => ['complete_in_progress', 'session_complete_in_progress'],
+            'payment_pending' => ['payment_pending', 'session_complete_in_progress'],
+            'requires_escalation' => ['requires_escalation', 'session_requires_escalation'],
+            'completed' => ['completed', 'session_completed'],
+            'canceled' => ['canceled', 'session_canceled'],
+        ];
+    }
+
+    public function test_cancel_of_an_incomplete_session_cancels_it(): void
+    {
+        $this->sessions->rows[self::SESSION_ID]['status'] = 'incomplete';
+
+        $response = $this->service()->cancel(self::SESSION_ID);
+
+        $this->assertSame(200, $response->status, (string) json_encode($response->body));
+        $this->assertSame('canceled', $response->body['status']);
+        $this->assertSame('canceled', $this->row()['status']);
+    }
+
+    public function test_cancel_that_loses_the_race_to_complete_answers_with_the_new_status(): void
+    {
+        $this->sessions->rows[self::SESSION_ID]['status'] = 'incomplete';
+        $this->sessions->statusBeforeCancel = 'complete_in_progress';
+
+        $response = $this->service()->cancel(self::SESSION_ID);
+
+        $this->assertSame(409, $response->status, (string) json_encode($response->body));
+        $this->assertSame('session_complete_in_progress', $response->body['messages'][0]['code']);
+        $this->assertSame('complete_in_progress', $this->row()['status']);
+    }
+
     public function test_retry_after_the_quote_expired_still_reaches_the_gateway(): void
     {
         $this->pendingSession();
