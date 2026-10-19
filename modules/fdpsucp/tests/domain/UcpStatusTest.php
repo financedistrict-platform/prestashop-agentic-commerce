@@ -50,6 +50,12 @@ final class UcpStatusTest extends TestCase
         $this->assertSame('completed', UcpStatus::resolve($this->makeSession(['status' => 'completed'])));
     }
 
+    public function test_session_being_completed_returns_complete_in_progress(): void
+    {
+        $this->assertSame('complete_in_progress', UcpStatus::resolve($this->makeSession(['status' => 'complete_in_progress'])));
+        $this->assertSame('complete_in_progress', UcpStatus::resolve($this->makeSession(['status' => 'payment_pending'])));
+    }
+
     public function test_full_session_returns_ready_for_complete(): void
     {
         $this->assertSame('ready_for_complete', UcpStatus::resolve($this->makeSession()));

@@ -24,7 +24,7 @@ final class UcpStatus
         if (($session['status'] ?? '') === 'requires_escalation') {
             return 'requires_escalation';
         }
-        if (($session['status'] ?? '') === 'payment_pending') {
+        if (in_array($session['status'] ?? '', ['payment_pending', 'complete_in_progress'], true)) {
             return 'complete_in_progress';
         }
         return self::missingRequirements($session) === [] ? 'ready_for_complete' : 'incomplete';
