@@ -81,7 +81,7 @@ class PrismClient
 
     private static function isRefusal(int $code): bool
     {
-        return $code >= 400 && $code < 500 && $code !== 408 && $code !== 429;
+        return $code >= 400 && $code < 500 && !in_array($code, [408, 409, 429], true);
     }
 
     /**
