@@ -11,7 +11,7 @@ if (!defined('_PS_VERSION_')) {
 
 final class PaymentIntegrity
 {
-    public const QUOTE_TTL = 1800;
+    public const QUOTE_TTL = 900;
 
     public static function quoteExpiry(): string
     {
