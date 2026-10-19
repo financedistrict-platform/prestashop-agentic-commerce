@@ -182,6 +182,18 @@ final class PaymentPendingTest extends TestCase
         ];
     }
 
+    #[DataProvider('statusesThatRefuseCancel')]
+    public function test_update_is_refused_with_the_ucp_status_code(string $status, string $code): void
+    {
+        $this->sessions->rows[self::SESSION_ID]['status'] = $status;
+
+        $response = $this->service()->update(self::SESSION_ID, ['buyer' => ['first_name' => 'Anne']]);
+
+        $this->assertSame(409, $response->status, (string) json_encode($response->body));
+        $this->assertSame($code, $response->body['messages'][0]['code']);
+        $this->assertSame($status, $this->row()['status']);
+    }
+
     public function test_cancel_of_an_incomplete_session_cancels_it(): void
     {
         $this->sessions->rows[self::SESSION_ID]['status'] = 'incomplete';

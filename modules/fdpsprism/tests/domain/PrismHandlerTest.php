@@ -566,6 +566,16 @@ final class PrismHandlerTest extends TestCase
         ];
     }
 
+    public function test_a_resumed_retry_with_an_unlisted_reason_keeps_the_gateway_transaction_for_review(): void
+    {
+        $tx = '0x' . str_repeat('dd', 32);
+
+        $result = $this->settleResumed(['success' => false, 'transaction' => $tx, 'errorReason' => 'receipt_timeout']);
+
+        $this->assertTrue($result['review'] ?? false);
+        $this->assertSame($tx, $result['transaction_reference'] ?? null);
+    }
+
     public function test_a_resumed_retry_without_a_reason_goes_to_review(): void
     {
         $result = $this->settleResumed(['success' => false, 'transaction' => '']);

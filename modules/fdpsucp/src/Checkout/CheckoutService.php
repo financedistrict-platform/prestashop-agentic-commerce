@@ -169,8 +169,9 @@ final class CheckoutService
         if ($pinError = $this->pinError($session)) {
             return $pinError;
         }
-        if (in_array($session['status'], ['canceled', 'completed', 'complete_in_progress', 'payment_pending', 'requires_escalation'], true)) {
-            return UcpError::response('session_' . $session['status'], 'Session is ' . $session['status'], 409);
+        $status = UcpStatus::resolve($session);
+        if (!in_array($status, ['incomplete', 'ready_for_complete'], true)) {
+            return UcpError::response('session_' . $status, 'Session is ' . $status, 409);
         }
 
         try {

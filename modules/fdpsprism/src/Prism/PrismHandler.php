@@ -355,17 +355,16 @@ final class PrismHandler implements PaymentHandlerInterface, VersionedPaymentHan
         if (in_array($key, self::PENDING_REASONS, true)) {
             return self::pending($key);
         }
+        $txRef = $result['transaction'] ?? null;
+        $withTx = is_string($txRef) && $txRef !== '' ? ['transaction_reference' => $txRef] : [];
         if (in_array($key, self::REVIEW_REASONS, true)) {
-            $txRef = $result['transaction'] ?? null;
-
-            return ['success' => false, 'review' => true, 'error' => $reason]
-                + (is_string($txRef) && $txRef !== '' ? ['transaction_reference' => $txRef] : []);
+            return ['success' => false, 'review' => true, 'error' => $reason] + $withTx;
         }
         if (preg_match('/^http_4(?!08$|09$|29$)\d\d$/', $key) === 1 || in_array($key, self::DEFINITE_REASONS, true)) {
             return ['success' => false, 'error' => $result['error'] ?? $reason];
         }
         if ($resumed) {
-            return ['success' => false, 'review' => true, 'error' => $key !== '' ? $key : 'settlement_unresolved'];
+            return ['success' => false, 'review' => true, 'error' => $key !== '' ? $key : 'settlement_unresolved'] + $withTx;
         }
 
         return self::pending($key !== '' ? $key : 'unlisted_reason');
