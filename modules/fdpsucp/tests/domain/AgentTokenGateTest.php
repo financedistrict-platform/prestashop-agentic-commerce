@@ -12,6 +12,8 @@ final class AgentTokenGateTest extends TestCase
         $this->assertFalse(AgentTokenGate::allows('', []));
         $this->assertFalse(AgentTokenGate::allows('', ['authorization' => 'Bearer ']));
         $this->assertFalse(AgentTokenGate::allows('', ['ucp-agent-token' => '']));
+        $this->assertFalse(AgentTokenGate::allows('', ['x-api-key' => '']));
+        $this->assertFalse(AgentTokenGate::allows('', ['x-api-key' => 'secret']));
     }
 
     public function test_matching_bearer_token_is_allowed(): void
@@ -29,5 +31,21 @@ final class AgentTokenGateTest extends TestCase
         $this->assertFalse(AgentTokenGate::allows('secret', []));
         $this->assertFalse(AgentTokenGate::allows('secret', ['authorization' => 'Bearer other']));
         $this->assertFalse(AgentTokenGate::allows('secret', ['ucp-agent-token' => 'other']));
+    }
+
+    public function test_matching_x_api_key_header_is_allowed(): void
+    {
+        $this->assertTrue(AgentTokenGate::allows('secret', ['x-api-key' => 'secret']));
+    }
+
+    public function test_x_api_key_header_is_trimmed(): void
+    {
+        $this->assertTrue(AgentTokenGate::allows('secret', ['x-api-key' => '  secret ']));
+    }
+
+    public function test_wrong_or_empty_x_api_key_is_rejected(): void
+    {
+        $this->assertFalse(AgentTokenGate::allows('secret', ['x-api-key' => 'other']));
+        $this->assertFalse(AgentTokenGate::allows('secret', ['x-api-key' => '']));
     }
 }

@@ -29,6 +29,8 @@ final class BackCompatOriginalAgentTest extends TestCase
 
         $session = FdTestGoldenRenderer::input('checkout-session.json');
         $session['ucp_version'] = null;
+        $session['payment_meta'] = json_encode(['xyz.fd.prism_payment' => ['prepared_amount' => 4695]]);
+        $session['expires_at'] = date('Y-m-d H:i:s', time() + 600);
         $this->sessions = new FdTestMemorySessions([self::SESSION_ID => $session]);
         $this->handler = new FdTestRecordingPrismHandler();
     }
@@ -110,12 +112,12 @@ final class BackCompatOriginalAgentTest extends TestCase
         $this->assertSame('payment.instruments[0].handler_id and credential are required', $response->body['messages'][0]['content']);
     }
 
-    public function test_throwing_handler_releases_the_session(): void
+    public function test_throwing_handler_holds_the_session_for_a_retry_with_the_same_credential(): void
     {
         $response = $this->complete(['handler_id' => 'x402', 'credential' => ['a' => 1]], new FdTestRecordingPrismHandler(true));
 
-        $this->assertSame(422, $response->status);
-        $this->assertSame('incomplete', $this->sessions->rows[self::SESSION_ID]['status']);
+        $this->assertSame(202, $response->status);
+        $this->assertSame('payment_pending', $this->sessions->rows[self::SESSION_ID]['status']);
     }
 
     public function test_session_pinned_to_another_version_rejects_a_matched_different_agent(): void
@@ -147,8 +149,9 @@ final class BackCompatOriginalAgentTest extends TestCase
 final class FdTestRecordingPrismHandler implements PaymentHandlerInterface
 {
     public array $settled = [];
+    public array $prepared = [];
 
-    public function __construct(private bool $throws = false)
+    public function __construct(private bool $throws = false, private bool $prepareThrows = false)
     {
     }
 
@@ -169,7 +172,19 @@ final class FdTestRecordingPrismHandler implements PaymentHandlerInterface
 
     public function prepareCheckoutPayment(array $input): ?array
     {
-        return null;
+        if ($this->prepareThrows) {
+            throw new RuntimeException('gateway down');
+        }
+        $this->prepared[] = $input;
+
+        return ['prepared_amount' => $input['total']];
+    }
+
+    public function preparedAmount(?array $checkoutMeta): ?int
+    {
+        $amount = $checkoutMeta[$this->id()]['prepared_amount'] ?? null;
+
+        return is_int($amount) ? $amount : null;
     }
 
     public function settlePayment(array $input): array
@@ -192,14 +207,35 @@ final class FdTestCartBuilder extends CartBuilder
 {
     public function build(array $session, \Context $context): \Cart
     {
-        return new Cart();
+        $cart = new Cart();
+        $cart->id_address_delivery = 9;
+        $cart->deliveryOptionList = [9 => ['7,' => ['total_price_with_tax' => 4.95]]];
+        $this->applySessionCarrier($cart, $session);
+
+        return $cart;
     }
 }
 
 final class FdTestMemorySessions extends SessionRepository
 {
+    public ?string $statusBeforeCancel = null;
+
     public function __construct(public array $rows)
     {
+    }
+
+    public function cancelIfIncomplete(string $uid, int $idShop): bool
+    {
+        if ($this->statusBeforeCancel !== null && isset($this->rows[$uid])) {
+            $this->rows[$uid]['status'] = $this->statusBeforeCancel;
+        }
+        if (($this->rows[$uid]['status'] ?? '') !== 'incomplete') {
+            return false;
+        }
+        $this->rows[$uid]['status'] = 'canceled';
+        $this->rows[$uid]['updated_at'] = date('Y-m-d H:i:s');
+
+        return true;
     }
 
     public function insert(array $data): bool
@@ -214,10 +250,10 @@ final class FdTestMemorySessions extends SessionRepository
         return $this->rows[$uid] ?? null;
     }
 
-    public function findByIdempotencyKey(string $key, int $idShop): ?array
+    public function findByIdempotencyKey(string $key, int $idShop, string $fingerprint): ?array
     {
         foreach ($this->rows as $row) {
-            if (($row['idempotency_key'] ?? null) === $key) {
+            if ($key !== '' && ($row['idempotency_key'] ?? null) === $key && ($row['agent_fingerprint'] ?? null) === $fingerprint) {
                 return $row;
             }
         }
@@ -234,10 +270,14 @@ final class FdTestMemorySessions extends SessionRepository
 
     public function claimForCompletion(string $uid, int $idShop): bool
     {
-        if (($this->rows[$uid]['status'] ?? '') !== 'incomplete') {
+        $row = $this->rows[$uid] ?? [];
+        $status = $row['status'] ?? '';
+        $stale = $status === 'complete_in_progress' && strtotime((string) ($row['updated_at'] ?? '')) <= time() - 60;
+        if (!$stale && !in_array($status, ['incomplete', 'payment_pending'], true)) {
             return false;
         }
         $this->rows[$uid]['status'] = 'complete_in_progress';
+        $this->rows[$uid]['updated_at'] = date('Y-m-d H:i:s');
 
         return true;
     }

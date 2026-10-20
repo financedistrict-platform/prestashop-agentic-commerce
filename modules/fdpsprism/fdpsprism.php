@@ -7,10 +7,11 @@ if (!defined('_PS_VERSION_')) {
 require_once __DIR__ . '/src/autoload.php';
 
 use FD\PrismPayment\Config\ConfigResolver;
+use FD\PrismPayment\Prism\SettlementSummary;
 
 class FdPsPrism extends PaymentModule
 {
-    public const VERSION = '0.7.7';
+    public const VERSION = '0.7.12';
 
     public function __construct()
     {
@@ -19,7 +20,7 @@ class FdPsPrism extends PaymentModule
         $this->version = self::VERSION;
         $this->author = 'Finance District';
         $this->need_instance = 0;
-        $this->ps_versions_compliancy = ['min' => '1.7.0.0', 'max' => _PS_VERSION_];
+        $this->ps_versions_compliancy = ['min' => '1.7.7.0', 'max' => _PS_VERSION_];
         $this->bootstrap = true;
         $this->currencies = true;
         $this->currencies_mode = 'checkbox';
@@ -37,7 +38,22 @@ class FdPsPrism extends PaymentModule
 
     public function install(): bool
     {
-        return parent::install() && $this->registerHook('actionUcpCollectPaymentHandlers');
+        return parent::install() && $this->registerHook('actionUcpCollectPaymentHandlers') && $this->registerHook('displayAdminOrderMainBottom');
+    }
+
+    public function hookDisplayAdminOrderMainBottom(array $params): string
+    {
+        $order = new Order((int) ($params['id_order'] ?? 0));
+        if (!Validate::isLoadedObject($order) || $order->module !== $this->name) {
+            return '';
+        }
+        if (!interface_exists(\FD\PrismUcp\Payment\PaymentHandlerInterface::class)) {
+            return '';
+        }
+        $transactionHash = SettlementSummary::transactionHash($order->getOrderPaymentCollection(), \FD\PrismPayment\Prism\PrismHandler::NAME);
+        $idShop = (int) $order->id_shop;
+
+        return SettlementSummary::render(SettlementSummary::load($transactionHash, ConfigResolver::apiUrl($idShop), ConfigResolver::apiKey($idShop)));
     }
 
     /**
@@ -48,7 +64,10 @@ class FdPsPrism extends PaymentModule
         if (empty($params['registry'])) {
             return;
         }
-        if (!interface_exists(\FD\PrismUcp\Payment\VersionedPaymentHandlerInterface::class)) {
+        if (!interface_exists(\FD\PrismUcp\Payment\VersionedPaymentHandlerInterface::class)
+            || !interface_exists(\FD\PrismUcp\Payment\ReplayLedger::class)
+            || !method_exists(\FD\PrismUcp\Payment\PaymentHandlerInterface::class, 'preparedAmount')
+        ) {
             \PrestaShopLogger::addLog('[FD Prism] Finance District UCP ' . self::VERSION . ' or newer is required; Prism handler not registered', 3);
 
             return;

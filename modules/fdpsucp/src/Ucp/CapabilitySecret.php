@@ -6,42 +6,27 @@ if (!defined('_PS_VERSION_')) {
     exit;
 }
 
-/**
- * Ownership check for the per-resource capability secret (carts, checkout
- * sessions, and the orders they produce). Pure logic — no PrestaShop or HTTP —
- * so the missing / wrong / legacy paths are unit-testable in isolation; the
- * services turn the verdict into the right Response.
- *
- * The secret is minted at create, returned once, and hashed (sha256) at rest.
- * Resources created before 0.5.0 have no stored hash and stay accessible.
- */
 final class CapabilitySecret
 {
-    /** Caller is authorized (legacy resource, or the secret matches). */
-    public const OK = 'ok';
-    /** No secret was supplied — the common integration mistake. */
-    public const MISSING = 'missing';
-    /** A secret was supplied but does not match — a real ownership violation. */
-    public const MISMATCH = 'mismatch';
+    public const HEADER = 'UCP-Session-Secret';
 
-    /**
-     * @return self::OK|self::MISSING|self::MISMATCH
-     */
-    public static function classify(string $storedHash, string $providedSecret): string
+    /** @return array{secret:string,hash:string} */
+    public static function issue(): array
     {
-        if ($storedHash === '') {
-            return self::OK; // legacy resource, no secret required
-        }
-        if ($providedSecret === '') {
-            return self::MISSING;
-        }
+        $secret = rtrim(strtr(base64_encode(random_bytes(32)), '+/', '-_'), '=');
 
-        return hash_equals($storedHash, hash('sha256', $providedSecret)) ? self::OK : self::MISMATCH;
+        return ['secret' => $secret, 'hash' => self::digest($secret)];
     }
 
-    /** Convenience boolean: is the caller allowed to proceed? */
-    public static function authorizes(string $storedHash, string $providedSecret): bool
+    public static function digest(string $secret): string
     {
-        return self::classify($storedHash, $providedSecret) === self::OK;
+        return hash('sha256', $secret);
+    }
+
+    public static function holds(string $storedHash, string $providedSecret): bool
+    {
+        return $providedSecret !== ''
+            && preg_match('/^[0-9a-f]{64}$/', $storedHash) === 1
+            && hash_equals($storedHash, self::digest($providedSecret));
     }
 }

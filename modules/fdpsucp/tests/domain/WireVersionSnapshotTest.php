@@ -112,6 +112,11 @@ final class FdTestEmptyConfigHandler implements \FD\PrismUcp\Payment\PaymentHand
         return ['success' => false];
     }
 
+    public function preparedAmount(?array $checkoutMeta): ?int
+    {
+        return null;
+    }
+
     public function getUcpCheckoutHandlers(?array $paymentMeta = null): array
     {
         return [];

@@ -27,8 +27,7 @@ class CartBuilder
         $idShop = (int) $session['id_shop'];
         $idLang = (int) $context->language->id;
 
-        $currency = \Currency::getIdByIsoCode((string) ($session['currency'] ?? ''), $idShop)
-            ?: (int) \Configuration::get('PS_CURRENCY_DEFAULT');
+        $currency = $this->pinCurrency($session, $context);
 
         $buyer = $this->decode($session['buyer'] ?? null);
         $customer = $this->resolveGuestCustomer($buyer, $idShop, $idLang);
@@ -42,7 +41,9 @@ class CartBuilder
         $cart->id_guest = (int) $context->cookie->id_guest;
         $cart->recyclable = 0;
         $cart->gift = 0;
-        $cart->add();
+        if (!$cart->add()) {
+            throw new \RuntimeException('The cart could not be created');
+        }
 
         $context->cart = $cart;
 
@@ -51,38 +52,58 @@ class CartBuilder
         if ($address !== null) {
             $cart->id_address_delivery = (int) $address->id;
             $cart->id_address_invoice = (int) $address->id;
-            $cart->update();
-        }
-
-        // Add line items.
-        foreach ($this->decode($session['line_items'] ?? null) as $li) {
-            $idProduct = (int) ($li['item']['id'] ?? 0);
-            $idProductAttribute = (int) ($li['item']['variant_id'] ?? 0);
-            $qty = max(1, (int) ($li['quantity'] ?? 1));
-            if ($idProduct > 0) {
-                $cart->updateQty($qty, $idProduct, $idProductAttribute ?: null);
+            if (!$cart->update()) {
+                throw new \RuntimeException('The delivery address could not be saved on the cart');
             }
         }
 
-        // Pick the cheapest available carrier if we have an address.
-        if ($address !== null) {
-            $this->assignDefaultCarrier($cart);
+        foreach ($this->decode($session['line_items'] ?? null) as $li) {
+            $this->addLine($cart, $li);
         }
+
+        $this->applySessionCarrier($cart, $session);
 
         return $cart;
     }
 
-    /**
-     * Select a specific carrier on the cart (agent chose a shipping option).
-     */
-    public function selectCarrier(\Cart $cart, int $idCarrier): void
+    private function addLine(\Cart $cart, mixed $line): void
     {
-        $idAddress = (int) $cart->id_address_delivery;
-        if ($idAddress === 0) {
+        $node = is_array($line) && is_array($line['item'] ?? null) ? $line['item'] : [];
+        $idProduct = LineItems::positiveInt($node['id'] ?? null);
+        $idVariant = LineItems::variantId($node['variant_id'] ?? null);
+        $quantity = LineItems::quantity(is_array($line) ? ($line['quantity'] ?? null) : null);
+        if ($idProduct === null || $idVariant === null || $quantity === null) {
+            throw new \RuntimeException('The checkout session holds a line item that is not valid');
+        }
+        if ($cart->updateQty($quantity, $idProduct, $idVariant ?: null) !== true) {
+            throw new \RuntimeException("Product $idProduct could not be added to the cart");
+        }
+    }
+
+    public function pinCurrency(array $session, \Context $context): int
+    {
+        $idShop = (int) ($session['id_shop'] ?? 0);
+        $idCurrency = (int) \Currency::getIdByIsoCode((string) ($session['currency'] ?? ''), $idShop);
+        $currency = $idCurrency > 0 ? new \Currency($idCurrency, null, $idShop) : null;
+        if (!\Validate::isLoadedObject($currency) || !$currency->active) {
+            throw new \UnexpectedValueException('Checkout session currency is not available in this shop');
+        }
+        $context->currency = $currency;
+
+        return $idCurrency;
+    }
+
+    public function applySessionCarrier(\Cart $cart, array $session): void
+    {
+        $offered = Fulfillment::offeredOptionKeys($cart);
+        if ($offered === []) {
             return;
         }
-        $cart->setDeliveryOption([$idAddress => $idCarrier . ',']);
-        $cart->update();
+        $selected = Fulfillment::selectedCarrierId($this->decode($session['fulfillment'] ?? null)) . ',';
+        $cart->setDeliveryOption([(int) $cart->id_address_delivery => in_array($selected, $offered, true) ? $selected : $offered[0]]);
+        if (!$cart->update()) {
+            throw new \RuntimeException('The selected carrier could not be saved on the cart');
+        }
     }
 
     /**
@@ -97,18 +118,53 @@ class CartBuilder
         ];
     }
 
+    public function priceLines(\Cart $cart, array $formatted): ?array
+    {
+        $inCart = [];
+        foreach ($cart->getProducts() ?: [] as $row) {
+            $inCart[(int) $row['id_product'] . '-' . (int) $row['id_product_attribute']] = $row;
+        }
+
+        $wanted = [];
+        foreach ($formatted as $li) {
+            $key = $this->lineKey($li);
+            $wanted[$key] = ($wanted[$key] ?? 0) + (int) $li['quantity'];
+        }
+        if (count($wanted) !== count($inCart)) {
+            return null;
+        }
+        foreach ($wanted as $key => $quantity) {
+            if (!isset($inCart[$key]['price_wt']) || (int) ($inCart[$key]['cart_quantity'] ?? 0) !== $quantity) {
+                return null;
+            }
+        }
+
+        $priced = [];
+        foreach ($formatted as $li) {
+            $price = $this->toMinor((float) $inCart[$this->lineKey($li)]['price_wt']);
+            $lineTotal = $price * (int) $li['quantity'];
+            $li['item']['price'] = $price;
+            $li['totals'] = [
+                ['type' => 'subtotal', 'amount' => $lineTotal],
+                ['type' => 'total', 'amount' => $lineTotal],
+            ];
+            $priced[] = $li;
+        }
+
+        return $priced;
+    }
+
+    private function lineKey(array $lineItem): string
+    {
+        return (int) ($lineItem['item']['id'] ?? 0) . '-' . (int) ($lineItem['item']['variant_id'] ?? 0);
+    }
+
     /**
      * @param array<string,mixed> $buyer
      */
     private function resolveGuestCustomer(array $buyer, int $idShop, int $idLang): \Customer
     {
         $email = (string) ($buyer['email'] ?? '');
-        if ($email !== '' && \Validate::isEmail($email)) {
-            $existingId = (int) \Customer::customerExists($email, true, true);
-            if ($existingId > 0) {
-                return new \Customer($existingId);
-            }
-        }
 
         $customer = new \Customer();
         $customer->is_guest = 1;
@@ -120,7 +176,9 @@ class CartBuilder
         $customer->firstname = (string) ($buyer['first_name'] ?? 'Agent');
         $customer->lastname = (string) ($buyer['last_name'] ?? 'Buyer');
         $customer->passwd = \Tools::hash(uniqid('ucp', true));
-        $customer->add();
+        if (!$customer->add()) {
+            throw new \RuntimeException('The guest customer could not be created');
+        }
 
         return $customer;
     }
@@ -137,7 +195,7 @@ class CartBuilder
         }
 
         $ps = UcpAddress::ucpToPs($dest);
-        $idCountry = (int) \Country::getByIso($ps['country']);
+        $idCountry = $this->deliveryCountryId($ps['country'], $idShop);
         if ($idCountry === 0) {
             return null;
         }
@@ -155,32 +213,40 @@ class CartBuilder
         $address->city = $ps['city'] ?: 'N/A';
         $address->postcode = $ps['postcode'];
 
-        if ($ps['state'] !== '') {
-            $idState = (int) \State::getIdByName($ps['state']);
-            if ($idState > 0) {
-                $address->id_state = $idState;
-            }
+        $idState = $this->deliveryStateId($ps['state'], $idCountry);
+        if ($idState > 0) {
+            $address->id_state = $idState;
         }
 
-        $address->add();
+        if (!$address->add()) {
+            throw new \RuntimeException('The delivery address could not be saved');
+        }
 
         return $address;
     }
 
-    private function assignDefaultCarrier(\Cart $cart): void
+    public function deliveryCountryId(string $iso, int $idShop): int
     {
-        $deliveryOptions = $cart->getDeliveryOptionList();
-        $idAddress = (int) $cart->id_address_delivery;
-        if (empty($deliveryOptions[$idAddress])) {
-            return;
+        if (!\Validate::isLanguageIsoCode($iso)) {
+            return 0;
         }
+        $idCountry = (int) \Country::getByIso($iso, true);
 
-        // getDeliveryOption() returns the best (default) delivery option string.
-        $best = $cart->getDeliveryOption(null, true);
-        if (is_array($best) && isset($best[$idAddress])) {
-            $cart->setDeliveryOption($best);
-            $cart->update();
+        return $idCountry > 0 && (new \Country($idCountry))->isAssociatedToShop($idShop) ? $idCountry : 0;
+    }
+
+    public function deliveryStateId(string $state, int $idCountry): int
+    {
+        if ($state === '') {
+            return 0;
         }
+        $idState = (int) \State::getIdByIso($state, $idCountry);
+        if ($idState > 0) {
+            return $idState;
+        }
+        $idState = (int) \State::getIdByName($state);
+
+        return $idState > 0 && (int) (new \State($idState))->id_country === $idCountry ? $idState : 0;
     }
 
     private function toMinor(float $amount): int

@@ -12,7 +12,7 @@ if (!defined('_PS_VERSION_')) {
  * a shop id (multistore isolation, FR-15). A cart is a lightweight holder of
  * line items; it is converted into a canonical ps_prism_session on checkout.
  */
-final class CartRepository
+class CartRepository
 {
     private string $table;
 
@@ -62,6 +62,17 @@ final class CartRepository
             'prism_cart',
             '`cart_uid` = "' . pSQL($uid) . '" AND `id_shop` = ' . (int) $idShop
         );
+    }
+
+    public function claim(string $id, int $idShop): bool
+    {
+        \Db::getInstance()->execute(
+            'DELETE FROM `' . $this->table . '`
+             WHERE `cart_uid` = "' . pSQL($id) . '"
+             AND `id_shop` = ' . (int) $idShop
+        );
+
+        return \Db::getInstance()->Affected_Rows() === 1;
     }
 
     /**

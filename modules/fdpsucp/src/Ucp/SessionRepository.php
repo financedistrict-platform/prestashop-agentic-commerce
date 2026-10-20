@@ -12,6 +12,8 @@ if (!defined('_PS_VERSION_')) {
  */
 class SessionRepository
 {
+    public const CLAIM_STALE_AFTER = 60;
+
     private string $table;
 
     public function __construct()
@@ -41,20 +43,20 @@ class SessionRepository
         return $row ?: null;
     }
 
-    /**
-     * Find a completed session by idempotency key for a shop (NFR-3).
-     *
-     * @return array<string,mixed>|null
-     */
-    public function findByIdempotencyKey(string $key, int $idShop): ?array
+    /** @return array<string,mixed>|null */
+    public function findByIdempotencyKey(string $key, int $idShop, string $fingerprint): ?array
     {
         if ($key === '') {
             return null;
         }
         $sql = 'SELECT * FROM `' . $this->table . '`
-                WHERE `idempotency_key` = "' . pSQL($key) . '"
-                AND `id_shop` = ' . (int) $idShop;
+                WHERE `idempotency_key` = "' . pSQL($key, true) . '"
+                AND `agent_fingerprint` = "' . pSQL($fingerprint) . '"
+                AND `id_shop` = ' . (int) $idShop . '
+                ORDER BY `id_prism_session` ASC
+                LIMIT 1';
         $row = \Db::getInstance()->getRow($sql);
+
         return $row ?: null;
     }
 
@@ -71,9 +73,10 @@ class SessionRepository
     }
 
     /**
-     * Atomically claim a session for completion: flip incomplete ->
-     * complete_in_progress only if currently incomplete. Returns true if THIS
-     * call won the claim (NFR-2, once-only settlement).
+     * Atomically claim a session for completion: flip incomplete,
+     * payment_pending or an abandoned complete_in_progress (older than
+     * CLAIM_STALE_AFTER) -> complete_in_progress. Returns true if THIS call
+     * won the claim (NFR-2, once-only settlement).
      */
     public function claimForCompletion(string $uid, int $idShop): bool
     {
@@ -81,9 +84,32 @@ class SessionRepository
                 SET `status` = "complete_in_progress", `updated_at` = "' . pSQL(date('Y-m-d H:i:s')) . '"
                 WHERE `session_uid` = "' . pSQL($uid) . '"
                 AND `id_shop` = ' . (int) $idShop . '
-                AND `status` = "incomplete"';
+                AND (`status` IN ("incomplete", "payment_pending")
+                    OR (`status` = "complete_in_progress" AND `updated_at` <= "' . pSQL(date('Y-m-d H:i:s', time() - self::CLAIM_STALE_AFTER)) . '"))';
         \Db::getInstance()->execute($sql);
         return \Db::getInstance()->Affected_Rows() === 1;
+    }
+
+    public function cancelIfIncomplete(string $uid, int $idShop): bool
+    {
+        $sql = 'UPDATE `' . $this->table . '`
+                SET `status` = "canceled", `updated_at` = "' . pSQL(date('Y-m-d H:i:s')) . '"
+                WHERE `session_uid` = "' . pSQL($uid) . '"
+                AND `id_shop` = ' . (int) $idShop . '
+                AND `status` = "incomplete"';
+        \Db::getInstance()->execute($sql);
+
+        return \Db::getInstance()->Affected_Rows() === 1;
+    }
+
+    /** @param array<string,mixed> $session */
+    public static function claimAbandoned(array $session): bool
+    {
+        $updatedAt = strtotime((string) ($session['updated_at'] ?? ''));
+
+        return ($session['status'] ?? '') === 'complete_in_progress'
+            && $updatedAt !== false
+            && $updatedAt <= time() - self::CLAIM_STALE_AFTER;
     }
 
     /**

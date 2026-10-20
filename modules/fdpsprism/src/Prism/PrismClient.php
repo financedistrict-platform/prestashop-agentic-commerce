@@ -8,6 +8,8 @@ if (!defined('_PS_VERSION_')) {
 
 class PrismClient
 {
+    private const SETTLE_TIMEOUT = 45;
+
     private string $apiUrl;
     private string $apiKey;
 
@@ -20,7 +22,7 @@ class PrismClient
     /** @return array<string,mixed>|null */
     public function fetchUcpHandlers(string $ucpVersion): ?array
     {
-        return $this->request('GET', '/api/v2/merchant/ucp/' . rawurlencode($ucpVersion) . '/handlers', null, 15);
+        return $this->request('GET', '/ucp/' . rawurlencode($ucpVersion) . '/handlers', null, 15);
     }
 
     /** @return array<string,mixed>|null */
@@ -36,27 +38,57 @@ class PrismClient
         ], 30);
     }
 
-    /**
-     * @param array<string,mixed> $x402Authorization
-     * @return array<string,mixed>|null
-     */
-    public function settle(array $x402Authorization): ?array
+    public function settlementSummary(string $transactionHash): ?array
     {
-        $version = (int) ($x402Authorization['x402Version']
-            ?? $x402Authorization['paymentPayload']['x402Version'] ?? 2);
-        $body = [
-            'paymentPayload' => $x402Authorization['paymentPayload'] ?? $x402Authorization,
-            'paymentRequirements' => $x402Authorization['paymentRequirements'] ?? null,
-        ];
+        return $this->request('GET', '/api/v2/merchant/payments/' . rawurlencode($transactionHash) . '/settlement', null, 5);
+    }
 
-        return $this->request('POST', "/api/v{$version}/payment/settle", $body, 30);
+    public function settle(int $version, array $paymentPayload, array $paymentRequirements): ?array
+    {
+        return $this->request('POST', "/api/v{$version}/payment/settle", [
+            'paymentPayload' => $paymentPayload,
+            'paymentRequirements' => $paymentRequirements,
+        ], self::SETTLE_TIMEOUT, true);
     }
 
     /**
      * @param array<string,mixed>|null $body
      * @return array<string,mixed>|null
      */
-    protected function request(string $method, string $path, ?array $body, int $timeout): ?array
+    protected function request(string $method, string $path, ?array $body, int $timeout, bool $refusalIsAnswer = false): ?array
+    {
+        $response = $this->transport($method, $path, $body, $timeout);
+        if ($response === null) {
+            return null;
+        }
+        [$code, $raw] = $response;
+
+        if ($code < 200 || $code >= 300) {
+            \PrestaShopLogger::addLog("[FD Prism] $method $path returned HTTP $code: " . substr($raw, 0, 500), 3);
+
+            return $refusalIsAnswer && self::isRefusal($code) ? ['success' => false, 'errorReason' => "http_$code"] : null;
+        }
+
+        $decoded = json_decode($raw, true);
+        if (!is_array($decoded)) {
+            \PrestaShopLogger::addLog("[FD Prism] $method $path returned invalid JSON: " . substr($raw, 0, 500), 3);
+
+            return null;
+        }
+
+        return $decoded;
+    }
+
+    private static function isRefusal(int $code): bool
+    {
+        return $code >= 400 && $code < 500 && !in_array($code, [408, 409, 429], true);
+    }
+
+    /**
+     * @param array<string,mixed>|null $body
+     * @return array{0:int,1:string}|null
+     */
+    protected function transport(string $method, string $path, ?array $body, int $timeout): ?array
     {
         if (!function_exists('curl_init')) {
             \PrestaShopLogger::addLog("[FD Prism] cURL unavailable for $method $path", 3);
@@ -93,20 +125,8 @@ class PrismClient
 
             return null;
         }
-        if ($code < 200 || $code >= 300) {
-            \PrestaShopLogger::addLog("[FD Prism] $method $path returned HTTP $code: " . substr((string) $raw, 0, 500), 3);
 
-            return null;
-        }
-
-        $decoded = json_decode((string) $raw, true);
-        if (!is_array($decoded)) {
-            \PrestaShopLogger::addLog("[FD Prism] $method $path returned invalid JSON: " . substr((string) $raw, 0, 500), 3);
-
-            return null;
-        }
-
-        return $decoded;
+        return [$code, (string) $raw];
     }
 
     public static function minorToMajorString(int $minorUnits): string

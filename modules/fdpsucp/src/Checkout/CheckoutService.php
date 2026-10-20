@@ -3,6 +3,7 @@
 namespace FD\PrismUcp\Checkout;
 
 use FD\PrismUcp\Http\Response;
+use FD\PrismUcp\Payment\PaymentIntegrity;
 use FD\PrismUcp\Payment\PaymentRegistry;
 use FD\PrismUcp\Ucp\CapabilitySecret;
 use FD\PrismUcp\Ucp\Formatter;
@@ -23,6 +24,8 @@ if (!defined('_PS_VERSION_')) {
  */
 final class CheckoutService
 {
+    private const PENDING_DIGEST_KEY = 'pending_credential_sha256';
+
     private SessionRepository $sessions;
     private CartBuilder $cartBuilder;
 
@@ -43,31 +46,36 @@ final class CheckoutService
         return (int) $this->context->shop->id;
     }
 
+    private function ownedSession(string $uid): array|Response
+    {
+        if ($this->sessionSecret === '') {
+            return UcpError::response('session_secret_required', 'Send the UCP-Session-Secret header returned when this checkout session was created', 401);
+        }
+        $session = $this->sessions->findByUid($uid, $this->idShop());
+        if (!$session || !CapabilitySecret::holds((string) ($session['session_secret_hash'] ?? ''), $this->sessionSecret)) {
+            return UcpError::response('checkout_not_found', 'Checkout session not found', 404);
+        }
+
+        return $session;
+    }
+
     // ---------------------------------------------------------------- create
 
     /** @param array<string,mixed> $body */
     public function create(array $body, ?string $idempotencyKey): Response
     {
-        // Idempotency (NFR-3, QA): a retried create with the same key returns the
-        // original session instead of inserting a duplicate. The one-time session
-        // secret is re-issued — the first response may not have reached the agent
-        // (that's why they retried). Scoped to the same agent fingerprint so one
-        // agent's key can never resurface another agent's session.
+        $bodyHash = hash('sha256', (string) json_encode($body));
         if ($idempotencyKey) {
-            $prior = $this->sessions->findByIdempotencyKey($idempotencyKey, $this->idShop());
-            if ($prior && ($prior['agent_fingerprint'] ?? '') === $this->agentFingerprint) {
+            $prior = $this->sessions->findByIdempotencyKey($idempotencyKey, $this->idShop(), $this->agentFingerprint);
+            if ($prior) {
+                if (!hash_equals((string) ($prior['idempotency_hash'] ?? ''), $bodyHash)) {
+                    return UcpError::response('idempotency_key_conflict', 'Idempotency-Key was already used with a different request', 409);
+                }
                 if ($pinError = $this->pinError($prior)) {
                     return $pinError;
                 }
-                $secret = bin2hex(random_bytes(32));
-                $this->sessions->update($prior['session_uid'], $this->idShop(), [
-                    'session_secret_hash' => hash('sha256', $secret),
-                    'updated_at' => date('Y-m-d H:i:s'),
-                ]);
-                $prior = $this->sessions->findByUid($prior['session_uid'], $this->idShop());
-                $out = Formatter::checkoutSession($prior, $this->registry);
-                $out['session_secret'] = $secret;
-                return Response::json(200, $out);
+
+                return Response::json(200, Formatter::checkoutSession($prior, $this->registry));
             }
         }
 
@@ -77,42 +85,16 @@ final class CheckoutService
         }
 
         $idLang = (int) $this->context->language->id;
-        $currency = $this->context->currency->iso_code;
+        $currency = (string) $this->context->currency->iso_code;
+        try {
+            $this->cartBuilder->pinCurrency(['id_shop' => $this->idShop(), 'currency' => $currency], $this->context);
+        } catch (\UnexpectedValueException $e) {
+            return UcpError::response('invalid_currency', $e->getMessage(), 422);
+        }
 
-        $formatted = [];
-        foreach ($lineItems as $item) {
-            $idProduct = (int) ($item['item']['id'] ?? 0);
-            $idAttr = (int) ($item['item']['variant_id'] ?? 0);
-            $qty = (int) ($item['quantity'] ?? 1);
-            if ($qty < 1) {
-                return UcpError::response('invalid_quantity', "Quantity for product $idProduct must be a positive integer", 422);
-            }
-
-            $product = new \Product($idProduct, false, $idLang);
-            if (!\Validate::isLoadedObject($product) || !$product->active) {
-                return UcpError::response('invalid_product', "Product $idProduct not found or not purchasable", 422);
-            }
-            if ($stockError = $this->checkStock($idProduct, $idAttr, $qty, $product)) {
-                return $stockError;
-            }
-
-            $price = Formatter::toMinor((float) \Product::getPriceStatic($idProduct, true, $idAttr ?: null));
-            $itemTotal = $price * $qty;
-            $name = is_array($product->name) ? ($product->name[$idLang] ?? reset($product->name)) : $product->name;
-
-            $entry = [
-                'id' => 'li_' . (count($formatted) + 1),
-                'item' => ['id' => (string) $idProduct, 'title' => (string) $name, 'price' => $price],
-                'quantity' => $qty,
-                'totals' => [
-                    ['type' => 'subtotal', 'amount' => $itemTotal],
-                    ['type' => 'total', 'amount' => $itemTotal],
-                ],
-            ];
-            if ($idAttr > 0) {
-                $entry['item']['variant_id'] = (string) $idAttr;
-            }
-            $formatted[] = $entry;
+        $formatted = LineItems::format($lineItems, $idLang);
+        if ($formatted instanceof Response) {
+            return $formatted;
         }
 
         $buyer = $this->extractBuyer($body['buyer'] ?? null);
@@ -126,12 +108,16 @@ final class CheckoutService
             'fulfillment' => $inputFulfillment,
         ];
 
-        [$totals, $fulfillment] = $this->priceAndFulfill($provisional, $formatted, $inputFulfillment);
+        $priced = $this->priceAndFulfill($provisional, $formatted, $inputFulfillment);
+        if ($priced instanceof Response) {
+            return $priced;
+        }
+        [$totals, $fulfillment, $formatted] = $priced;
 
         $uid = self::uuid();
-        $paymentMeta = $this->registry->prepareAll($this->prepareInput($uid, $totals, $currency));
+        $quote = $this->quote($uid, $totals, $currency);
 
-        $secret = bin2hex(random_bytes(32));
+        $issued = CapabilitySecret::issue();
         $now = date('Y-m-d H:i:s');
         $this->sessions->insert([
             'session_uid' => $uid,
@@ -142,37 +128,31 @@ final class CheckoutService
             'totals' => json_encode($totals),
             'buyer' => $buyer ? json_encode($buyer) : null,
             'fulfillment' => $fulfillment ? json_encode($fulfillment) : null,
-            'payment_meta' => json_encode($paymentMeta),
             'agent_fingerprint' => $this->agentFingerprint,
-            'session_secret_hash' => hash('sha256', $secret),
+            'session_secret_hash' => $issued['hash'],
             'idempotency_key' => $idempotencyKey,
+            'idempotency_hash' => $idempotencyKey ? $bodyHash : null,
             'ucp_version' => RequestContext::current()->sessionPin(),
             'created_at' => $now,
             'updated_at' => $now,
-            'expires_at' => date('Y-m-d H:i:s', time() + 6 * 3600),
-        ]);
+        ] + $quote);
 
         $session = $this->sessions->findByUid($uid, $this->idShop());
         $out = Formatter::checkoutSession($session, $this->registry);
-        // The capability secret is returned exactly once, at creation. The agent
-        // must store it and send it as `UCP-Session-Secret` on every later call.
-        $out['session_secret'] = $secret;
-        return Response::json(201, $out);
+
+        return Response::json(201, $out)->withHeader(CapabilitySecret::HEADER, $issued['secret']);
     }
 
     // ------------------------------------------------------------------- get
 
     public function get(string $uid): Response
     {
-        $session = $this->sessions->findByUid($uid, $this->idShop());
-        if (!$session) {
-            return UcpError::response('checkout_not_found', 'Checkout session not found', 404);
+        $session = $this->ownedSession($uid);
+        if ($session instanceof Response) {
+            return $session;
         }
         if ($pinError = $this->pinError($session)) {
             return $pinError;
-        }
-        if ($authError = $this->sessionAuthError($session)) {
-            return $authError;
         }
         return Response::json(200, Formatter::checkoutSession($session, $this->registry));
     }
@@ -182,18 +162,22 @@ final class CheckoutService
     /** @param array<string,mixed> $body */
     public function update(string $uid, array $body): Response
     {
-        $session = $this->sessions->findByUid($uid, $this->idShop());
-        if (!$session) {
-            return UcpError::response('checkout_not_found', 'Checkout session not found', 404);
+        $session = $this->ownedSession($uid);
+        if ($session instanceof Response) {
+            return $session;
         }
         if ($pinError = $this->pinError($session)) {
             return $pinError;
         }
-        if ($authError = $this->sessionAuthError($session)) {
-            return $authError;
+        $status = UcpStatus::resolve($session);
+        if (!in_array($status, ['incomplete', 'ready_for_complete'], true)) {
+            return UcpError::response('session_' . $status, 'Session is ' . $status, 409);
         }
-        if (in_array($session['status'], ['canceled', 'completed', 'complete_in_progress'], true)) {
-            return UcpError::response('session_' . $session['status'], 'Session is ' . $session['status'], 409);
+
+        try {
+            $this->cartBuilder->pinCurrency($session, $this->context);
+        } catch (\UnexpectedValueException $e) {
+            return UcpError::response('invalid_currency', $e->getMessage(), 422);
         }
 
         $idLang = (int) $this->context->language->id;
@@ -208,37 +192,9 @@ final class CheckoutService
 
         // Line items (full replace)
         if (!empty($body['line_items']) && is_array($body['line_items'])) {
-            $formatted = [];
-            foreach ($body['line_items'] as $item) {
-                $idProduct = (int) ($item['item']['id'] ?? 0);
-                $idAttr = (int) ($item['item']['variant_id'] ?? 0);
-                $qty = (int) ($item['quantity'] ?? 1);
-                if ($qty < 1) {
-                    return UcpError::response('invalid_quantity', "Quantity for product $idProduct must be a positive integer", 422);
-                }
-                $product = new \Product($idProduct, false, $idLang);
-                if (!\Validate::isLoadedObject($product) || !$product->active) {
-                    return UcpError::response('invalid_product', "Product $idProduct not found", 422);
-                }
-                if ($stockError = $this->checkStock($idProduct, $idAttr, $qty, $product)) {
-                    return $stockError;
-                }
-                $price = Formatter::toMinor((float) \Product::getPriceStatic($idProduct, true, $idAttr ?: null));
-                $itemTotal = $price * $qty;
-                $name = is_array($product->name) ? ($product->name[$idLang] ?? reset($product->name)) : $product->name;
-                $entry = [
-                    'id' => $item['id'] ?? ('li_' . (count($formatted) + 1)),
-                    'item' => ['id' => (string) $idProduct, 'title' => (string) $name, 'price' => $price],
-                    'quantity' => $qty,
-                    'totals' => [
-                        ['type' => 'subtotal', 'amount' => $itemTotal],
-                        ['type' => 'total', 'amount' => $itemTotal],
-                    ],
-                ];
-                if ($idAttr > 0) {
-                    $entry['item']['variant_id'] = (string) $idAttr;
-                }
-                $formatted[] = $entry;
+            $formatted = LineItems::format($body['line_items'], $idLang, true);
+            if ($formatted instanceof Response) {
+                return $formatted;
             }
         }
 
@@ -254,7 +210,11 @@ final class CheckoutService
             'buyer' => $buyer,
             'fulfillment' => $fulfillmentInput,
         ];
-        [$totals, $fulfillment] = $this->priceAndFulfill($provisional, $formatted, $fulfillmentInput);
+        $priced = $this->priceAndFulfill($provisional, $formatted, $fulfillmentInput);
+        if ($priced instanceof Response) {
+            return $priced;
+        }
+        [$totals, $fulfillment, $formatted] = $priced;
 
         $updates = [
             'line_items' => json_encode($formatted),
@@ -267,11 +227,12 @@ final class CheckoutService
         // Re-prepare payment if the total changed.
         $oldTotal = $this->totalOf(json_decode($session['totals'] ?? '[]', true) ?: []);
         $newTotal = $this->totalOf($totals);
-        if ($oldTotal !== $newTotal || empty($session['payment_meta']) || $session['payment_meta'] === 'null') {
-            $paymentMeta = $this->registry->prepareAll(
-                $this->prepareInput($uid, $totals, (string) $session['currency'])
-            );
-            $updates['payment_meta'] = json_encode($paymentMeta);
+        if ($oldTotal !== $newTotal
+            || empty($session['payment_meta'])
+            || $session['payment_meta'] === 'null'
+            || PaymentIntegrity::quoteExpired($session)
+        ) {
+            $updates = $this->quote($uid, $totals, (string) $session['currency']) + $updates;
         }
 
         $this->sessions->update($uid, $this->idShop(), $updates);
@@ -283,25 +244,21 @@ final class CheckoutService
 
     public function cancel(string $uid): Response
     {
-        $session = $this->sessions->findByUid($uid, $this->idShop());
-        if (!$session) {
-            return UcpError::response('checkout_not_found', 'Checkout session not found', 404);
+        $session = $this->ownedSession($uid);
+        if ($session instanceof Response) {
+            return $session;
         }
         if ($pinError = $this->pinError($session)) {
             return $pinError;
         }
-        if ($authError = $this->sessionAuthError($session)) {
-            return $authError;
-        }
-        if ($session['status'] === 'completed') {
-            return UcpError::response('session_completed', 'Cannot cancel a completed session', 409);
+        if (!$this->sessions->cancelIfIncomplete($uid, $this->idShop())) {
+            $status = UcpStatus::resolve($this->sessions->findByUid($uid, $this->idShop()) ?? $session);
+
+            return UcpError::response('session_' . $status, 'Session is ' . $status, 409);
         }
 
-        $this->sessions->update($uid, $this->idShop(), [
-            'status' => 'canceled',
-            'updated_at' => date('Y-m-d H:i:s'),
-        ]);
-        $session['status'] = 'canceled';
+        $session = $this->sessions->findByUid($uid, $this->idShop()) ?? ['status' => 'canceled'] + $session;
+
         return Response::json(200, Formatter::checkoutSession($session, $this->registry));
     }
 
@@ -310,32 +267,26 @@ final class CheckoutService
     /** @param array<string,mixed> $body */
     public function complete(string $uid, array $body, ?string $idempotencyKey): Response
     {
-        // Idempotency: replay a prior completion (NFR-3). Only the owner of the
-        // prior session (capability-secret holder) may replay it.
+        $session = $this->ownedSession($uid);
+        if ($session instanceof Response) {
+            return $session;
+        }
+        if ($pinError = $this->pinError($session)) {
+            return $pinError;
+        }
         if ($idempotencyKey) {
-            $prior = $this->sessions->findByIdempotencyKey($idempotencyKey, $this->idShop());
-            if ($prior && $this->ownsSession($prior) && $prior['status'] === 'completed' && !empty($prior['id_order'])) {
-                if ($pinError = $this->pinError($prior)) {
-                    return $pinError;
-                }
+            $prior = $this->sessions->findByIdempotencyKey($idempotencyKey, $this->idShop(), $this->agentFingerprint);
+            if ($prior && ($prior['session_uid'] ?? '') !== $uid) {
+                return UcpError::response('idempotency_key_reused', 'This idempotency key is already bound to a different checkout session', 409);
+            }
+            if ($prior && $prior['status'] === 'completed' && !empty($prior['id_order'])) {
                 $order = new \Order((int) $prior['id_order']);
                 if (\Validate::isLoadedObject($order)) {
                     return Response::json(200, Formatter::completeResponse($prior, $order, $this->registry));
                 }
             }
         }
-
-        $session = $this->sessions->findByUid($uid, $this->idShop());
-        if (!$session) {
-            return UcpError::response('checkout_not_found', 'Checkout session not found', 404);
-        }
-        if ($pinError = $this->pinError($session)) {
-            return $pinError;
-        }
-        if ($authError = $this->sessionAuthError($session)) {
-            return $authError;
-        }
-        if (in_array($session['status'], ['canceled', 'completed'], true)) {
+        if (in_array($session['status'], ['canceled', 'completed', 'requires_escalation'], true)) {
             return UcpError::response('session_' . $session['status'], 'Session is ' . $session['status'], 409);
         }
 
@@ -363,18 +314,77 @@ final class CheckoutService
             return UcpError::response('unknown_handler', "Unknown payment handler: $handlerId", 422);
         }
 
+        $credentialDigest = self::credentialDigest($instrument['credential']);
+        $resumed = self::pendingDigest($session) !== ''
+            && ($session['status'] === 'payment_pending' || SessionRepository::claimAbandoned($session));
+        if ($resumed && !hash_equals(self::pendingDigest($session), $credentialDigest)) {
+            return UcpError::response(
+                'payment_pending_mismatch',
+                'A payment for this session is still being confirmed. Retry with the same credential.',
+                409
+            );
+        }
+        $restoreStatus = $resumed ? 'payment_pending' : 'incomplete';
+
         // Atomic, once-only claim (NFR-2).
         if (!$this->sessions->claimForCompletion($uid, $this->idShop())) {
-            return UcpError::response('session_in_progress', 'Session is already being completed', 409);
+            return UcpError::response('settlement_in_progress', 'Session is already being completed', 409);
+        }
+        if ($resumed) {
+            $this->sessions->update($uid, $this->idShop(), ['expires_at' => PaymentIntegrity::quoteExpiry()]);
+        }
+        $session = $this->sessions->findByUid($uid, $this->idShop()) ?? $session;
+
+        try {
+            $this->cartBuilder->pinCurrency($session, $this->context);
+        } catch (\UnexpectedValueException $e) {
+            $this->sessions->update($uid, $this->idShop(), ['status' => $restoreStatus]);
+            return UcpError::response('invalid_currency', $e->getMessage(), 422);
         }
 
         try {
             $cart = $this->cartBuilder->build($session, $this->context);
         } catch (\Throwable $e) {
-            $this->sessions->update($uid, $this->idShop(), ['status' => 'incomplete']);
+            $this->sessions->update($uid, $this->idShop(), ['status' => $restoreStatus]);
             \PrestaShopLogger::addLog('[FD UCP] Cart build failed: ' . $e->getMessage(), 3);
             return UcpError::response('cart_build_failed', 'Could not build the cart for this session', 422);
         }
+
+        $carrierError = Fulfillment::selectionError($cart, $session);
+        if ($carrierError !== null) {
+            $this->sessions->update($uid, $this->idShop(), ['status' => $restoreStatus]);
+            return UcpError::response('carrier_unavailable', $carrierError, 422);
+        }
+
+        $lines = $this->cartBuilder->priceLines($cart, json_decode($session['line_items'] ?? '[]', true) ?: []);
+        if ($lines === null) {
+            $this->sessions->update($uid, $this->idShop(), ['status' => $restoreStatus]);
+            return self::cartMismatch();
+        }
+
+        if (PaymentIntegrity::quoteError($session, $cart) !== null) {
+            if ($resumed) {
+                $this->sessions->update($uid, $this->idShop(), ['status' => $restoreStatus]);
+
+                return UcpError::response(
+                    'quote_changed',
+                    'The order total no longer matches the quote while a payment is still being confirmed. Retry later with the same credential.',
+                    409
+                );
+            }
+            try {
+                return $this->requote($uid, $session, $cart, $lines, PaymentIntegrity::quoteExpired($session));
+            } catch (\Throwable $e) {
+                $this->sessions->update($uid, $this->idShop(), ['status' => 'incomplete']);
+                \PrestaShopLogger::addLog('[FD UCP] Requote failed: ' . $e->getMessage(), 3);
+
+                return UcpError::response('requote_failed', 'Could not re-quote this checkout session', 422);
+            }
+        }
+
+        $this->sessions->update($uid, $this->idShop(), [
+            'payment_meta' => json_encode([self::PENDING_DIGEST_KEY => $credentialDigest] + (json_decode($session['payment_meta'] ?? '{}', true) ?: [])),
+        ]);
 
         try {
             $result = $this->registry->settle($handlerId, [
@@ -384,20 +394,36 @@ final class CheckoutService
                 'instrument_type' => $instrument['type'] ?? null,
                 'credential' => $instrument['credential'],
                 'checkout_meta' => json_decode($session['payment_meta'] ?? 'null', true),
-            ]);
+            ] + ($resumed ? ['resumed' => true] : []));
         } catch (\Throwable $e) {
-            $this->sessions->update($uid, $this->idShop(), ['status' => 'incomplete']);
-            \PrestaShopLogger::addLog('[FD UCP] Settlement failed: ' . $e->getMessage(), 3);
+            \PrestaShopLogger::addLog('[FD UCP] Settlement outcome unknown: ' . $e->getMessage(), 3);
 
-            return UcpError::response('payment_failed', 'Payment settlement failed', 422);
+            return $this->holdForConfirmation($uid, $session, $credentialDigest, 'handler_exception');
         }
 
-        if (empty($result['success']) || empty($result['id_order'])) {
-            $this->sessions->update($uid, $this->idShop(), ['status' => 'incomplete']);
+        $txRef = is_string($result['transaction_reference'] ?? null) && $result['transaction_reference'] !== '' ? $result['transaction_reference'] : null;
+        if (empty($result['success']) && !empty($result['review'])) {
+            return $this->escalate($uid, $session, (string) ($result['error'] ?? 'settlement_unresolved'), $txRef);
+        }
+        if (empty($result['success']) && !empty($result['pending'])) {
+            return $this->holdForConfirmation($uid, $session, $credentialDigest, (string) ($result['reason'] ?? 'settlement_outcome_unknown'));
+        }
+        if (empty($result['success']) && $resumed) {
+            return $this->escalate($uid, $session, (string) ($result['error'] ?? 'settlement_unresolved'), $txRef);
+        }
+        if (!empty($result['success']) && empty($result['id_order'])) {
+            return $this->escalate($uid, $session, 'order_not_created', $txRef);
+        }
+
+        if (empty($result['success'])) {
+            $released = json_decode($session['payment_meta'] ?? '{}', true) ?: [];
+            unset($released[self::PENDING_DIGEST_KEY]);
+            $this->sessions->update($uid, $this->idShop(), ['status' => 'incomplete', 'payment_meta' => json_encode($released)]);
             return UcpError::response('payment_failed', $result['error'] ?? 'Payment settlement failed', 422);
         }
 
         $paymentMeta = json_decode($session['payment_meta'] ?? '{}', true) ?: [];
+        unset($paymentMeta[self::PENDING_DIGEST_KEY]);
         if (!empty($result['transaction_reference'])) {
             $paymentMeta['transaction_reference'] = $result['transaction_reference'];
         }
@@ -425,6 +451,84 @@ final class CheckoutService
 
     // --------------------------------------------------------------- helpers
 
+    private function holdForConfirmation(string $uid, array $session, string $credentialDigest, string $reason): Response
+    {
+        \PrestaShopLogger::addLog("[FD UCP] Payment held, settlement outcome unknown: session $uid, reason $reason. Only the same credential may retry; do not release the cart.", 3);
+        $paymentMeta = json_decode($session['payment_meta'] ?? '{}', true) ?: [];
+        $paymentMeta[self::PENDING_DIGEST_KEY] = $credentialDigest;
+        $this->sessions->update($uid, $this->idShop(), [
+            'status' => 'payment_pending',
+            'payment_meta' => json_encode($paymentMeta),
+            'updated_at' => date('Y-m-d H:i:s'),
+        ]);
+        $session = $this->sessions->findByUid($uid, $this->idShop()) ?? $session;
+
+        return Response::json(202, self::withMessage(
+            Formatter::checkoutSession($session, $this->registry),
+            'info',
+            'settlement_pending',
+            'The payment is still being confirmed. Retry complete with the same credential.'
+        ));
+    }
+
+    private function escalate(string $uid, array $session, string $reason, ?string $txRef = null): Response
+    {
+        \PrestaShopLogger::addLog("[FD UCP] Payment held for merchant review: session $uid, reason $reason. Funds may have moved; check the transaction before releasing or refunding.", 3);
+        $paymentMeta = json_decode($session['payment_meta'] ?? '{}', true) ?: [];
+        unset($paymentMeta[self::PENDING_DIGEST_KEY]);
+        $paymentMeta['review_reason'] = $reason;
+        if ($txRef !== null) {
+            $paymentMeta['transaction_reference'] = $txRef;
+        }
+        $this->sessions->update($uid, $this->idShop(), [
+            'status' => 'requires_escalation',
+            'payment_meta' => json_encode($paymentMeta),
+            'updated_at' => date('Y-m-d H:i:s'),
+        ]);
+        $session = $this->sessions->findByUid($uid, $this->idShop()) ?? $session;
+
+        return Response::json(200, self::withMessage(
+            Formatter::checkoutSession($session, $this->registry),
+            'warning',
+            'payment_requires_review',
+            "The payment needs merchant review ($reason). Do not pay again; contact the merchant."
+        ));
+    }
+
+    private static function withMessage(array $body, string $type, string $code, string $content): array
+    {
+        $body['messages'] = array_merge(
+            [['type' => $type, 'code' => $code, 'content' => $content]],
+            is_array($body['messages'] ?? null) ? $body['messages'] : []
+        );
+
+        return $body;
+    }
+
+    private static function credentialDigest(mixed $credential): string
+    {
+        return hash('sha256', is_string($credential) ? $credential : (string) json_encode(self::canonical($credential)));
+    }
+
+    private static function canonical(mixed $value): mixed
+    {
+        if (!is_array($value)) {
+            return $value;
+        }
+        if (!array_is_list($value)) {
+            ksort($value);
+        }
+
+        return array_map(self::canonical(...), $value);
+    }
+
+    private static function pendingDigest(array $session): string
+    {
+        $paymentMeta = json_decode($session['payment_meta'] ?? '{}', true);
+
+        return is_array($paymentMeta) ? (string) ($paymentMeta[self::PENDING_DIGEST_KEY] ?? '') : '';
+    }
+
     public static function instrumentError(mixed $instrument): ?string
     {
         if (!is_array($instrument)
@@ -450,40 +554,86 @@ final class CheckoutService
      * @param array<string,mixed> $provisional
      * @param array<int,array<string,mixed>> $formatted
      * @param array<string,mixed>|null $inputFulfillment
-     * @return array{0:array<int,array<string,mixed>>,1:array<string,mixed>|null}
+     * @return array{0:array<int,array<string,mixed>>,1:array<string,mixed>|null,2:array<int,array<string,mixed>>}|Response
      */
-    private function priceAndFulfill(array $provisional, array $formatted, ?array $inputFulfillment): array
+    private function priceAndFulfill(array $provisional, array $formatted, ?array $inputFulfillment): array|Response
     {
-        $cart = $this->cartBuilder->build($provisional, $this->context);
-
-        // Subtotal is the sum of the line items (catalog prices), so it always
-        // matches what the agent sees per item. The Cart is used only to price
-        // shipping (and later to create the order).
-        $subtotal = 0;
-        foreach ($formatted as $li) {
-            $subtotal += $this->totalOf($li['totals'] ?? []);
+        try {
+            $cart = $this->cartBuilder->build($provisional, $this->context);
+        } catch (\UnexpectedValueException $e) {
+            return UcpError::response('invalid_currency', $e->getMessage(), 422);
+        } catch (\Throwable $e) {
+            \PrestaShopLogger::addLog('[FD UCP] Cart build failed: ' . $e->getMessage(), 3);
+            return UcpError::response('cart_build_failed', 'Could not build the cart for this session', 422);
         }
 
         $dest = $inputFulfillment['methods'][0]['destinations'][0] ?? null;
-        $fulfillment = null;
-        $shipping = 0;
-        if (is_array($dest) && !empty($dest['address_country']) && (int) $cart->id_address_delivery > 0) {
-            $selected = Fulfillment::selectedCarrierId($inputFulfillment);
-            if ($selected !== null && ctype_digit($selected)) {
-                $this->cartBuilder->selectCarrier($cart, (int) $selected);
-            }
-            $shipping = $this->cartBuilder->totals($cart)['shipping'];
-            $lineItemIds = array_column($formatted, 'id');
-            $fulfillment = Fulfillment::fromCart($cart, $dest, $lineItemIds, $selected);
+        if (!is_array($dest) || empty($dest['address_country'])) {
+            $subtotal = array_sum(array_map(fn (array $li): int => $this->totalOf($li['totals'] ?? []), $formatted));
+
+            return [self::totalsList($subtotal, 0, $subtotal), null, $formatted];
         }
 
+        $coverageError = Fulfillment::coverageError($cart);
+        if ($coverageError !== null) {
+            return UcpError::response('carrier_unavailable', $coverageError, 422);
+        }
+
+        $priced = $this->cartBuilder->priceLines($cart, $formatted);
+        if ($priced === null) {
+            return self::cartMismatch();
+        }
+        $fulfillment = Fulfillment::fromCart($cart, $dest, array_column($priced, 'id'), Fulfillment::appliedOptionId($cart));
+
+        return [$this->cartTotals($cart), $fulfillment, $priced];
+    }
+
+    private function cartTotals(\Cart $cart): array
+    {
+        $amounts = $this->cartBuilder->totals($cart);
+
+        return self::totalsList($amounts['subtotal'], $amounts['shipping'], $amounts['total']);
+    }
+
+    private static function cartMismatch(): Response
+    {
+        return UcpError::response('cart_mismatch', 'The delivery cart does not match the requested line items', 422);
+    }
+
+    private static function totalsList(int $subtotal, int $shipping, int $total): array
+    {
         $totals = [['type' => 'subtotal', 'amount' => $subtotal]];
         if ($shipping > 0) {
             $totals[] = ['type' => 'fulfillment', 'amount' => $shipping];
         }
-        $totals[] = ['type' => 'total', 'amount' => $subtotal + $shipping];
+        $totals[] = ['type' => 'total', 'amount' => $total];
 
-        return [$totals, $fulfillment];
+        return $totals;
+    }
+
+    private function requote(string $uid, array $session, \Cart $cart, array $lines, bool $expired): Response
+    {
+        $totals = $this->cartTotals($cart);
+        $this->sessions->update($uid, $this->idShop(), [
+            'status' => 'incomplete',
+            'line_items' => json_encode($lines),
+            'totals' => json_encode($totals),
+            'updated_at' => date('Y-m-d H:i:s'),
+        ] + $this->quote($uid, $totals, (string) $session['currency']));
+
+        if ($expired) {
+            return UcpError::response(
+                'quote_expired',
+                'The checkout quote expired. The session was re-quoted; fetch it and pay the new amount.',
+                409
+            );
+        }
+
+        return UcpError::response(
+            'quote_changed',
+            'The order total no longer matches the quote. The session was re-quoted; fetch it and pay the new amount.',
+            409
+        );
     }
 
     /**
@@ -497,6 +647,14 @@ final class CheckoutService
             }
         }
         return 0;
+    }
+
+    private function quote(string $uid, array $totals, string $currency): array
+    {
+        return [
+            'payment_meta' => json_encode($this->registry->prepareAll($this->prepareInput($uid, $totals, $currency))),
+            'expires_at' => PaymentIntegrity::quoteExpiry(),
+        ];
     }
 
     /**
@@ -535,68 +693,6 @@ final class CheckoutService
             $buyer['last_name'] = (string) $raw['last_name'];
         }
         return $buyer === [] ? null : $buyer;
-    }
-
-    /**
-     * A session is owned by whoever presents the capability secret minted at
-     * creation. The secret is never echoed back after create, so it can't be
-     * lifted from a later response or a spoofable header (unlike the old
-     * agent-fingerprint check). Sessions created before 0.5.0 have no stored
-     * hash and remain accessible (legacy compatibility).
-     *
-     * @param array<string,mixed> $session
-     */
-    private function ownsSession(array $session): bool
-    {
-        return CapabilitySecret::authorizes((string) ($session['session_secret_hash'] ?? ''), $this->sessionSecret);
-    }
-
-    /**
-     * Authorization guard for an existing session: returns an error Response to
-     * send back, or null when the caller may proceed. Distinguishes "no secret
-     * supplied" — the common integration mistake, answered with an actionable
-     * message naming the header — from "wrong secret", a genuine ownership
-     * violation. Both are 403; the code/message is what tells them apart.
-     *
-     * @param array<string,mixed> $session
-     */
-    private function sessionAuthError(array $session): ?Response
-    {
-        $storedHash = (string) ($session['session_secret_hash'] ?? '');
-        switch (CapabilitySecret::classify($storedHash, $this->sessionSecret)) {
-            case CapabilitySecret::MISSING:
-                return UcpError::response(
-                    'session_secret_required',
-                    'This checkout session requires its capability secret. Send the `session_secret` from the create response as the `UCP-Session-Secret` request header.',
-                    403
-                );
-            case CapabilitySecret::MISMATCH:
-                return UcpError::response('session_ownership', 'Session belongs to a different agent', 403);
-            default:
-                return null;
-        }
-    }
-
-    /**
-     * Reject a line item whose quantity exceeds available stock, unless the
-     * product allows ordering when out of stock (backorders). Returns a UcpError
-     * Response on failure, or null when the quantity is orderable.
-     */
-    private function checkStock(int $idProduct, int $idAttr, int $qty, \Product $product): ?Response
-    {
-        if (\Product::isAvailableWhenOutOfStock((int) $product->out_of_stock)) {
-            return null;
-        }
-        $available = (int) \StockAvailable::getQuantityAvailableByProduct($idProduct, $idAttr ?: null);
-        if ($qty > $available) {
-            return UcpError::response(
-                'insufficient_stock',
-                "Requested quantity ($qty) exceeds available stock ($available) for product $idProduct",
-                422
-            );
-        }
-
-        return null;
     }
 
     private static function uuid(): string

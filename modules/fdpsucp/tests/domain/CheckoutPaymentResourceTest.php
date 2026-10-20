@@ -33,18 +33,17 @@ final class CheckoutPaymentResourceTest extends TestCase
         return $service;
     }
 
-    private function create(): array
+    private function create(): \FD\PrismUcp\Http\Response
     {
         $response = $this->service()->create(['line_items' => [['item' => ['id' => '6'], 'quantity' => 1]]], null);
         $this->assertSame(201, $response->status, (string) json_encode($response->body));
 
-        return $response->body;
+        return $response;
     }
 
     public function test_create_prepares_payment_for_the_session_it_returns(): void
     {
-        $body = $this->create();
-        $sessionId = $body['id'];
+        $sessionId = $this->create()->body['id'];
         $meta = json_decode($this->sessions->rows[$sessionId]['payment_meta'], true);
 
         $this->assertSame([$sessionId], $this->handler->preparedFor);
@@ -53,10 +52,10 @@ final class CheckoutPaymentResourceTest extends TestCase
 
     public function test_requote_on_update_keeps_the_session_id(): void
     {
-        $body = $this->create();
-        $sessionId = $body['id'];
+        $created = $this->create();
+        $sessionId = $created->body['id'];
 
-        $response = $this->service($body['session_secret'])->update($sessionId, ['line_items' => [['item' => ['id' => '7'], 'quantity' => 1]]]);
+        $response = $this->service($created->headers['UCP-Session-Secret'])->update($sessionId, ['line_items' => [['item' => ['id' => '7'], 'quantity' => 1]]]);
         $meta = json_decode($this->sessions->rows[$sessionId]['payment_meta'], true);
 
         $this->assertSame(200, $response->status, (string) json_encode($response->body));
@@ -98,6 +97,11 @@ final class FdTestPreparingHandler implements PaymentHandlerInterface
     public function settlePayment(array $input): array
     {
         return ['success' => false];
+    }
+
+    public function preparedAmount(?array $checkoutMeta): ?int
+    {
+        return null;
     }
 
     public function getUcpCheckoutHandlers(?array $paymentMeta = null): array

@@ -16,6 +16,17 @@ class AgentProfileFetcher
     public const MAX_LOCATION = 512;
     public const REDIRECT_CODES = [301, 302, 303, 307, 308];
 
+    private const NON_PUBLIC_IPV4 = [
+        ['100.64.0.0', 10],
+        ['192.0.0.0', 24],
+        ['192.0.2.0', 24],
+        ['198.18.0.0', 15],
+        ['198.51.100.0', 24],
+        ['203.0.113.0', 24],
+        ['224.0.0.0', 4],
+        ['240.0.0.0', 4],
+    ];
+
     private static array $lru = [];
 
     private bool $fetched = false;
@@ -253,7 +264,7 @@ class AgentProfileFetcher
             if ($loopback && $ip === '127.0.0.1') {
                 continue;
             }
-            if (!filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE)) {
+            if (!self::isPublicIp($ip)) {
                 return null;
             }
         }
@@ -264,6 +275,26 @@ class AgentProfileFetcher
             'port' => (int) ($parts['port'] ?? ($scheme === 'https' ? 443 : 80)),
             'ip' => $ips[0],
         ];
+    }
+
+    private static function isPublicIp(string $ip): bool
+    {
+        if (!filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE)) {
+            return false;
+        }
+
+        $long = ip2long($ip);
+        if ($long === false) {
+            return true;
+        }
+        foreach (self::NON_PUBLIC_IPV4 as [$network, $prefix]) {
+            $mask = -1 << (32 - $prefix);
+            if (($long & $mask) === (ip2long($network) & $mask)) {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     protected function resolveHost(string $host): array

@@ -22,7 +22,7 @@ class FdPsUcp extends Module
 {
     public const UCP_VERSION = VersionRegistry::DEFAULT_CURRENT;
 
-    public const VERSION = '0.7.5';
+    public const VERSION = '0.7.12';
 
     public function __construct()
     {
@@ -325,6 +325,7 @@ class FdPsUcp extends Module
             `agent_fingerprint` VARCHAR(128) NULL,
             `session_secret_hash` VARCHAR(64) NULL,
             `idempotency_key` VARCHAR(128) NULL,
+            `idempotency_hash` CHAR(64) NULL,
             `ucp_version` VARCHAR(10) NULL,
             `created_at` DATETIME NOT NULL,
             `updated_at` DATETIME NULL,
@@ -366,7 +367,13 @@ class FdPsUcp extends Module
 
         return (bool) Db::getInstance()->execute($sessionSql)
             && (bool) Db::getInstance()->execute($cartSql)
-            && (bool) Db::getInstance()->execute($rateSql);
+            && (bool) Db::getInstance()->execute($rateSql)
+            && $this->installReplayTable();
+    }
+
+    public function installReplayTable(): bool
+    {
+        return (bool) Db::getInstance()->execute(\FD\PrismUcp\Payment\DbReplayLedger::createSql(_MYSQL_ENGINE_));
     }
 
     private function uninstallDb(): bool
@@ -374,6 +381,7 @@ class FdPsUcp extends Module
         // Keep order data; only drop our own tables.
         return (bool) Db::getInstance()->execute('DROP TABLE IF EXISTS `' . _DB_PREFIX_ . 'prism_session`')
             && (bool) Db::getInstance()->execute('DROP TABLE IF EXISTS `' . _DB_PREFIX_ . 'prism_cart`')
-            && (bool) Db::getInstance()->execute('DROP TABLE IF EXISTS `' . _DB_PREFIX_ . 'prism_rate_limit`');
+            && (bool) Db::getInstance()->execute('DROP TABLE IF EXISTS `' . _DB_PREFIX_ . 'prism_rate_limit`')
+            && (bool) Db::getInstance()->execute('DROP TABLE IF EXISTS `' . _DB_PREFIX_ . \FD\PrismUcp\Payment\DbReplayLedger::TABLE . '`');
     }
 }

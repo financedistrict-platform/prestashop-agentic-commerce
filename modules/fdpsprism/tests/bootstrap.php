@@ -9,5 +9,6 @@ require_once dirname(__DIR__, 2) . '/fdpsucp/src/Payment/PaymentHandlerInterface
 require_once dirname(__DIR__) . '/src/Config/ConfigResolver.php';
 require_once dirname(__DIR__) . '/src/Prism/PrismValidator.php';
 require_once dirname(__DIR__) . '/src/Prism/PrismClient.php';
+require_once dirname(__DIR__) . '/src/Prism/SettlementSummary.php';
 require_once dirname(__DIR__) . '/src/Prism/PrismHandler.php';
 require_once dirname(__DIR__) . '/fdpsprism.php';

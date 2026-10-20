@@ -6,6 +6,7 @@ use FD\PrismUcp\Http\Response;
 use FD\PrismUcp\Ucp\CapabilitySecret;
 use FD\PrismUcp\Ucp\Formatter;
 use FD\PrismUcp\Ucp\UcpError;
+use FD\PrismUcp\Ucp\VersionPin;
 
 if (!defined('_PS_VERSION_')) {
     exit;
@@ -17,30 +18,32 @@ if (!defined('_PS_VERSION_')) {
  */
 final class OrderService
 {
-    public function __construct(private \Context $context, private string $sessionSecret = '')
+    public function __construct(private \Context $context, private string $sessionSecret = '', private ?VersionPin $pin = null)
     {
     }
 
     public function get(int $idOrder): Response
     {
+        if ($this->sessionSecret === '') {
+            return UcpError::response('session_secret_required', 'Send the UCP-Session-Secret header returned when the checkout session was created', 401);
+        }
+
         $idShop = (int) $this->context->shop->id;
 
-        // Order must exist, belong to this shop, and have been placed via UCP.
         $row = \Db::getInstance()->getRow(
-            'SELECT `id_order`, `session_secret_hash` FROM `' . _DB_PREFIX_ . 'prism_session`
+            'SELECT `id_order`, `session_secret_hash`, `ucp_version` FROM `' . _DB_PREFIX_ . 'prism_session`
              WHERE `id_order` = ' . (int) $idOrder . ' AND `id_shop` = ' . $idShop
         );
         if (!$row || (int) $row['id_order'] === 0) {
             return UcpError::response('order_not_found', 'Order not found', 404);
         }
 
-        // Only the agent that owns the originating session (capability-secret
-        // holder) may read the order. A generic 404 avoids confirming existence
-        // to a non-owner — so both a missing and a wrong secret map to 404 here,
-        // unlike the cart/session endpoints which distinguish the two.
         $storedHash = (string) ($row['session_secret_hash'] ?? '');
-        if (!CapabilitySecret::authorizes($storedHash, $this->sessionSecret)) {
+        if (!CapabilitySecret::holds($storedHash, $this->sessionSecret)) {
             return UcpError::response('order_not_found', 'Order not found', 404);
+        }
+        if ($pinError = $this->pin?->check($row['ucp_version'] ?? null)) {
+            return $pinError;
         }
 
         $order = new \Order($idOrder);

@@ -3,10 +3,13 @@
 namespace FD\PrismDummy;
 
 use FD\PrismUcp\Payment\PaymentHandlerInterface;
+use FD\PrismUcp\Ucp\Formatter;
 
 if (!defined('_PS_VERSION_')) {
     exit;
 }
+
+require_once __DIR__ . '/DummyGate.php';
 
 /**
  * Always-succeeds payment handler. On settle it turns the session's transient
@@ -17,8 +20,13 @@ final class DummyHandler implements PaymentHandlerInterface
 {
     public const NS = 'com.fd.dummy';
 
-    public function __construct(private \PaymentModule $module)
+    public function __construct(private \PaymentModule $module, private ?DummyGate $gate = null)
     {
+    }
+
+    private function isOpen(): bool
+    {
+        return ($this->gate ?? DummyGate::fromEnvironment())->isOpen();
     }
 
     public function id(): string
@@ -34,6 +42,10 @@ final class DummyHandler implements PaymentHandlerInterface
     /** @return array<string,array<int,array<string,mixed>>> */
     public function getUcpDiscoveryHandlers(): array
     {
+        if (!$this->isOpen()) {
+            return [];
+        }
+
         return [
             self::NS => [[
                 'id' => $this->id(),
@@ -54,10 +66,13 @@ final class DummyHandler implements PaymentHandlerInterface
      */
     public function prepareCheckoutPayment(array $input): ?array
     {
-        // No gateway round-trip; just echo the amount we'd charge.
+        if (!$this->isOpen()) {
+            return null;
+        }
+
         return [
             'handler' => $this->id(),
-            'amount' => $input['total'] ?? 0,
+            'amount' => $input['total'] ?? null,
             'currency' => $input['currency'] ?? 'USD',
         ];
     }
@@ -68,11 +83,8 @@ final class DummyHandler implements PaymentHandlerInterface
      */
     public function settlePayment(array $input): array
     {
-        // Safety rail: this handler always "succeeds" with no real payment, so
-        // it must never place paid orders on a production store. Refuse unless
-        // the shop is explicitly in developer mode.
-        if (!(defined('_PS_MODE_DEV_') && _PS_MODE_DEV_)) {
-            return ['success' => false, 'error' => 'Dummy payment handler is disabled outside developer mode'];
+        if (!$this->isOpen()) {
+            return ['success' => false, 'error' => 'Dummy payment handler is disabled'];
         }
 
         /** @var \Cart $cart */
@@ -86,14 +98,18 @@ final class DummyHandler implements PaymentHandlerInterface
             return ['success' => false, 'error' => 'Invalid customer'];
         }
 
-        $total = (float) $cart->getOrderTotal(true, \Cart::BOTH);
+        $paidAmount = $input['paid_amount'] ?? null;
+        if (!is_int($paidAmount)) {
+            return ['success' => false, 'error' => 'Payment amount was not verified'];
+        }
+
         $txRef = 'DUMMY-' . strtoupper(bin2hex(random_bytes(8)));
 
         try {
             $this->module->validateOrder(
                 (int) $cart->id,
                 (int) \Configuration::get('PS_OS_PAYMENT'),
-                $total,
+                Formatter::toMajor($paidAmount),
                 $this->name(),
                 null,
                 ['transaction_id' => $txRef],
@@ -118,12 +134,23 @@ final class DummyHandler implements PaymentHandlerInterface
         ];
     }
 
+    public function preparedAmount(?array $checkoutMeta): ?int
+    {
+        $amount = $checkoutMeta[$this->id()]['amount'] ?? null;
+
+        return is_int($amount) ? $amount : null;
+    }
+
     /**
      * @param array<string,mixed>|null $paymentMeta
      * @return array<string,array<int,array<string,mixed>>>
      */
     public function getUcpCheckoutHandlers(?array $paymentMeta = null): array
     {
+        if (!$this->isOpen()) {
+            return [];
+        }
+
         return [
             self::NS => [[
                 'id' => $this->id(),

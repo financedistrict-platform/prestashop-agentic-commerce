@@ -18,7 +18,7 @@ class FdPsDummy extends PaymentModule
     {
         $this->name = 'fdpsdummy';
         $this->tab = 'payments_gateways';
-        $this->version = '0.1.0';
+        $this->version = '0.1.1';
         $this->author = 'Finance District';
         $this->need_instance = 0;
         $this->ps_versions_compliancy = ['min' => '1.7.0.0', 'max' => _PS_VERSION_];
@@ -52,7 +52,15 @@ class FdPsDummy extends PaymentModule
         if (empty($params['registry'])) {
             return;
         }
+        if (!method_exists(\FD\PrismUcp\Payment\PaymentHandlerInterface::class, 'preparedAmount')) {
+            \PrestaShopLogger::addLog('[FD Dummy] A newer Finance District UCP module is required; Dummy handler not registered', 3);
+
+            return;
+        }
         require_once __DIR__ . '/src/DummyHandler.php';
+        if (!\FD\PrismDummy\DummyGate::fromEnvironment()->isOpen()) {
+            return;
+        }
         $params['registry']->register(new \FD\PrismDummy\DummyHandler($this));
     }
 }

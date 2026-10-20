@@ -79,6 +79,9 @@ class FdPsUcpApiModuleFrontController extends ModuleFrontController
     private function emit(Response $response): void
     {
         header('Content-Type: application/json');
+        foreach ($response->headers as $name => $value) {
+            header($name . ': ' . $value);
+        }
         // No CORS: agents call this server-to-server. A wildcard ACAO would let
         // any web origin read authenticated responses (token + buyer PII).
         http_response_code($response->status);

@@ -2,6 +2,7 @@
 
 declare(strict_types=1);
 
+use FD\PrismUcp\Orders\OrderService;
 use FD\PrismUcp\Ucp\RequestContext;
 use FD\PrismUcp\Ucp\VersionPin;
 use FD\PrismUcp\Ucp\VersionResolver;
@@ -109,5 +110,24 @@ final class SessionPinTest extends TestCase
         $this->assertSame(422, $response->status);
         $this->assertSame('version_unsupported', $response->body['messages'][0]['code']);
         $this->assertSame('2026-04-08', $response->body['ucp']['version']);
+    }
+
+    public function test_order_of_a_session_pinned_to_another_version_gets_the_pin_rejection(): void
+    {
+        $pin = fn (): VersionPin => new VersionPin(
+            new VersionResolver(
+                FdTestLegacyVersionStore::registry(),
+                new FdTestFixtureProfileFetcher(['https://agent.example/p' => FdTestFixtureProfileFetcher::declaring('2026-04-08')])
+            ),
+            'profile="https://agent.example/p"'
+        );
+        Db::$row = ['id_order' => 1001, 'session_secret_hash' => hash('sha256', 'test'), 'ucp_version' => '2026-08-25'];
+        $expected = $pin()->check('2026-08-25');
+
+        $response = (new OrderService(Context::getContext(), 'test', $pin()))->get(1001);
+
+        $this->assertSame(422, $expected->status);
+        $this->assertSame($expected->status, $response->status, (string) json_encode($response->body));
+        $this->assertSame($expected->body, $response->body);
     }
 }

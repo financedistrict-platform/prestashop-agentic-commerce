@@ -21,6 +21,7 @@ require_once $psRoot . '/config/config.inc.php';
 require_once dirname(__DIR__, 2) . '/src/autoload.php';
 
 use FD\PrismUcp\Cart\CartRepository;
+use FD\PrismUcp\Ucp\CapabilitySecret;
 use FD\PrismUcp\Ucp\SessionRepository;
 
 $pass = 0;
@@ -46,6 +47,8 @@ $now = date('Y-m-d H:i:s');
 
 $uid = 'iso-sess-' . uniqid();
 $idem = 'iso-idem-' . uniqid();
+$secret = bin2hex(random_bytes(16));
+$fingerprint = hash('sha256', 'iso-agent-' . uniqid());
 $cuid = 'iso-cart-' . uniqid();
 
 echo "FR-15 multistore isolation (shop A=" . SHOP_A . " vs shop B=" . SHOP_B . ")\n\n";
@@ -58,14 +61,17 @@ $sessions->insert([
     'currency' => 'USD',
     'line_items' => json_encode([['id' => 'li_1']]),
     'idempotency_key' => $idem,
+    'agent_fingerprint' => $fingerprint,
+    'session_secret_hash' => CapabilitySecret::digest($secret),
     'created_at' => $now,
 ]);
 
 echo "Session:\n";
 check('visible on its own shop (A)', $sessions->findByUid($uid, SHOP_A) !== null);
 check('INVISIBLE on another shop (B)', $sessions->findByUid($uid, SHOP_B) === null);
-check('idempotency lookup scoped to shop A', $sessions->findByIdempotencyKey($idem, SHOP_A) !== null);
-check('idempotency lookup invisible on shop B', $sessions->findByIdempotencyKey($idem, SHOP_B) === null);
+check('idempotency lookup scoped to shop A', $sessions->findByIdempotencyKey($idem, SHOP_A, $fingerprint) !== null);
+check('idempotency lookup invisible on shop B', $sessions->findByIdempotencyKey($idem, SHOP_B, $fingerprint) === null);
+check('idempotency lookup with an empty key finds nothing', $sessions->findByIdempotencyKey('', SHOP_A, $fingerprint) === null);
 // Atomic claim (NFR-2) must also be shop-scoped: another shop cannot claim it.
 check('claimForCompletion refused on wrong shop (B)', $sessions->claimForCompletion($uid, SHOP_B) === false);
 check('claimForCompletion succeeds on owning shop (A)', $sessions->claimForCompletion($uid, SHOP_A) === true);

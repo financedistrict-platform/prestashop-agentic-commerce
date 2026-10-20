@@ -89,7 +89,13 @@ final class PaymentRegistry
         if (!$handler) {
             return ['success' => false, 'error' => "Unknown payment handler: $handlerId"];
         }
-        return $handler->settlePayment($input);
+        $paidAmount = $handler->preparedAmount($input['checkout_meta'] ?? null);
+        $amountError = PaymentIntegrity::settlementError($input['session'] ?? [], $input['cart'], $paidAmount);
+        if ($amountError !== null) {
+            return ['success' => false, 'error' => $amountError];
+        }
+
+        return $handler->settlePayment(['paid_amount' => $paidAmount] + $input);
     }
 
     /**

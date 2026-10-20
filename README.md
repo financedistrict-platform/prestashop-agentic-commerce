@@ -105,6 +105,8 @@ php bin/console prestashop:module install fdpsprism
 php bin/console prestashop:module install fdpsdummy
 ```
 
+The **fdpsdummy** handler places paid orders without taking any payment, so it stays closed unless all three hold: `define('FDPSDUMMY_ENABLED', true);` in `config/defines_custom.inc.php`, the shop runs in developer mode (`_PS_MODE_DEV_`), and no Prism API key is configured. While closed it is not registered, not listed in `/.well-known/ucp`, and refuses to settle.
+
 Install **fdpsucp** first, then the payment handlers — they register with the core via the `actionUcpCollectPaymentHandlers` hook. Run `bin/console` as the web-server user (e.g. `www-data`), not root, or the cache write will break the Back Office.
 
 #### Web-server rewrites
@@ -143,6 +145,8 @@ RewriteRule ^module/fdpsucp/api(?:/(.*))?$ index.php?fc=module&module=fdpsucp&co
 2. Enter your **Prism Gateway URL** and **API Key** (stored per-shop)
 3. Save — the handler is advertised in discovery only once configured
 
+The order page of a Prism order shows a "Prism settlement" block with Net received and Refund up to. Refund at most that amount; buyer cashback is already paid on-chain. After upgrading from 0.7.10, run the module upgrade (Module Manager → Upgrade) so the block's hook is registered.
+
 ### UCP versions
 
 The store speaks three UCP versions. Set them under **Modules → Finance District UCP → Configure → UCP versions**:
@@ -173,7 +177,7 @@ A checkout session or cart remembers the version its agent declared at creation.
 
 An unknown stored value is rejected on save. If one is stored anyway, the module configuration page shows an error and every UCP route answers `500 configuration_invalid`; the shop itself keeps running.
 
-Payment instruments from 0.5.3-era agents still complete: `handler_id` `x402` or `xyz.fd.prism_payment`, instrument `type` `x402`, `tokenized`, `default` or missing, and a credential with or without `type`. The Prism quote binding and Prism settlement stay the guards.
+Payment instruments from 0.5.3-era agents still complete: `handler_id` `x402` or `xyz.fd.prism_payment`, instrument `type` `x402`, `tokenized`, `default` or missing, and a credential with or without `type`. The credential itself must be an x402 v2 `exact` payment payload (bare, wrapped in `paymentPayload`, or in an `authorization` envelope) whose signed amount equals the quoted amount; flat credentials are rejected.
 
 ### Agent authentication (closed by default)
 
@@ -187,24 +191,17 @@ Authorization: Bearer <token>
 
 Discovery (`/.well-known/ucp`) stays reachable so agents can find the store. If `FDPSUCP_AGENT_TOKEN` is empty, every shopping endpoint answers `401` until a token is generated, so an empty token never opens the API. Regenerating the token immediately invalidates the old one.
 
-**2. Session secret (which session is yours).** Creating a cart or checkout session returns a one-time secret in the response body — `cart_secret` for a cart, `session_secret` for a checkout session. **Store it and send it back on every later call to that resource**, or the call is rejected:
-
-```
-UCP-Session-Secret: <secret>     # checkout sessions (and, accepted, carts)
-UCP-Cart-Secret:    <secret>     # carts — alias matching the cart_secret field
-```
-
-Round-trip:
+**2. Session secret (which cart or session is yours).** `POST /carts`, `POST /checkout-sessions` and `POST /carts/{id}/checkout` answer `201` with a one-time `UCP-Session-Secret` response header. The body never contains it. Store it and send it as the `UCP-Session-Secret` request header on every later call to that resource:
 
 | Step | Call | Secret to send | Secret returned |
-|------|------|----------------|-----------------|
-| Create cart | `POST /carts` | — | `cart_secret` |
-| Get / update / checkout cart | `… /carts/{id}[/checkout]` | the `cart_secret` | (checkout ⇒ a new `session_secret`) |
-| Create session | `POST /checkout-sessions` | — | `session_secret` |
-| Update / complete session | `… /checkout-sessions/{id}[/complete]` | the `session_secret` | — |
-| Read the order | `GET /orders/{id}` | the originating `session_secret` | — |
+|---|---|---|---|
+| Create cart | `POST /carts` | — | header (cart secret) |
+| Get / update / delete / checkout cart | `… /carts/{id}[/checkout]` | the cart secret | checkout ⇒ header with a new session secret |
+| Create session | `POST /checkout-sessions` | — | header (session secret) |
+| Get / update / cancel / complete session | `… /checkout-sessions/{id}[/…]` | the session secret | — |
+| Read the order | `GET /orders/{id}` | the session secret of the session that placed it | — |
 
-The secret is never echoed again after creation, so it can't be lifted from a later response. Omitting it returns **`403 session_secret_required`** / **`cart_secret_required`** (a clear "you forgot the header"); sending the *wrong* one returns **`403 session_ownership`** / **`cart_ownership`**. The order read instead returns **`404`** when the secret is missing or wrong, to avoid confirming the order exists to a non-owner. This is what keeps one agent from reading or completing another's session even when they share the same agent token. All endpoints require HTTPS.
+Without the header the answer is `401 session_secret_required`. With a wrong secret, for a resource created without one, or for an unknown id it is `404` (`cart_not_found`, `checkout_not_found`, `order_not_found`). The secret is checked before the version pin. A replayed create with the same `Idempotency-Key` and body from the same agent returns the stored session (`200`) without the header; another body gets `409 idempotency_key_conflict`. URLs in responses carry ids only. After upgrading from an earlier version, run the module upgrade (Module Manager → Upgrade) so the session table gets its idempotency column; sessions and carts created before the upgrade answer `404`. All endpoints require HTTPS.
 
 ### Prism Console Setup
 
@@ -364,7 +361,10 @@ modules/
 
 - **Own session table** — checkout state lives in a dedicated `ps_prism_session` table (canonical); a PrestaShop `Cart` is used transiently for pricing/shipping only.
 - **Handler fan-out** — multiple payment handlers coexist. The registry calls `prepareCheckoutPayment` on all handlers at session creation; the agent selects which to pay with at complete time.
-- **Binding guard before settle** — the signed x402 credential is validated (network / asset / recipient / amount, BigInt-safe) against the stored quote *before* any settlement call (NFR-1).
+- **Binding guard before settle** — the signed x402 credential must name a stored requirement (scheme / network / asset / recipient / amount, exact) and carry a signature, a nonce and a live validity window *before* any settlement call (NFR-1). Settlement is sent to Prism from the stored requirement and resource only; requirements, version or extra fields written by the buyer are never forwarded.
+- **One use per authorization** — before a signed payment is sent to Prism, its network, token, payer and nonce are claimed for the checkout session in `ps_prism_payment_replay` (unique key). The settlement transaction is recorded in the same table, also unique, before the order is placed. An authorization or transaction already used by another session is refused, and so is any payment when the table cannot be written. Existing stores get the table from the module upgrade.
+- **Unknown settlement outcome is held, not failed** — a settle call that times out, gets no answer, returns 5xx or an unreadable body may already have moved funds. The session becomes `payment_pending` (HTTP 202, UCP status `complete_in_progress`) and remembers a SHA-256 digest of the credential. Only the same credential may complete it again (the gateway settles it idempotently); a different one gets `409 payment_pending_mismatch`, and update and cancel get `409`. A gateway answer of `authorization_consumed` or `settlement_unresolved` moves the session to `requires_escalation` (`409 payment_requires_review`) with no order placed, for merchant review. Any other gateway rejection fails the checkout as before, and a fresh credential is allowed. A retry skips only the authorization expiry check, so an expired authorization still reaches the gateway for a final answer, and any non-pending failure of a retry goes to `requires_escalation`. A claim abandoned for more than 60 seconds (for example a crashed request) resumes the same way.
+- **Strict line items** — each line needs a numeric product id, a variant that is a combination of that product (or none) and a whole quantity from 1 to 1000. Anything else is refused with `invalid_product`, `invalid_variant` or `invalid_quantity`. A line the PrestaShop cart does not accept fails the session instead of being dropped from the order.
 - **Multistore** — the shop is resolved from the request domain (PrestaShop native dispatch); every session/cart query is scoped by `id_shop` (FR-15).
 - **Plain merchant labels** — no x402/ERC-3009 jargon in the Back Office; it stays in code and developer docs.
 

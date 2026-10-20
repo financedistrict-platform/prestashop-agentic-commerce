@@ -3,10 +3,10 @@
 namespace FD\PrismUcp\Cart;
 
 use FD\PrismUcp\Checkout\CheckoutService;
+use FD\PrismUcp\Checkout\LineItems;
 use FD\PrismUcp\Http\Response;
 use FD\PrismUcp\Payment\PaymentRegistry;
 use FD\PrismUcp\Ucp\CapabilitySecret;
-use FD\PrismUcp\Ucp\Formatter;
 use FD\PrismUcp\Ucp\RequestContext;
 use FD\PrismUcp\Ucp\UcpError;
 use FD\PrismUcp\Ucp\VersionPin;
@@ -42,6 +42,19 @@ final class CartService
         return (int) $this->context->shop->id;
     }
 
+    private function ownedCart(string $uid): array|Response
+    {
+        if ($this->sessionSecret === '') {
+            return UcpError::response('session_secret_required', 'Send the UCP-Session-Secret header returned when this cart was created', 401);
+        }
+        $cart = $this->carts->findByUid($uid, $this->idShop());
+        if (!$cart || !CapabilitySecret::holds((string) ($cart['cart_secret_hash'] ?? ''), $this->sessionSecret)) {
+            return UcpError::response('cart_not_found', 'Cart not found', 404);
+        }
+
+        return $cart;
+    }
+
     // ---------------------------------------------------------------- create
 
     /** @param array<string,mixed> $body */
@@ -52,20 +65,20 @@ final class CartService
             return UcpError::response('missing_line_items', 'line_items array is required', 400);
         }
 
-        $formatted = $this->formatLineItems($lineItems);
+        $formatted = LineItems::format($lineItems, (int) $this->context->language->id);
         if ($formatted instanceof Response) {
             return $formatted;
         }
 
         $uid = self::uuid();
-        $secret = bin2hex(random_bytes(32));
+        $issued = CapabilitySecret::issue();
         $now = date('Y-m-d H:i:s');
         $this->carts->insert([
             'cart_uid' => $uid,
             'id_shop' => $this->idShop(),
             'line_items' => json_encode($formatted),
             'agent_fingerprint' => $this->agentFingerprint,
-            'cart_secret_hash' => hash('sha256', $secret),
+            'cart_secret_hash' => $issued['hash'],
             'ucp_version' => RequestContext::current()->sessionPin(),
             'created_at' => $now,
             'updated_at' => $now,
@@ -74,25 +87,20 @@ final class CartService
         $cart = $this->carts->findByUid($uid, $this->idShop());
 
         $out = $this->formatCart($cart);
-        // Returned once at creation; required as `UCP-Session-Secret` thereafter.
-        $out['cart_secret'] = $secret;
 
-        return Response::json(201, $out);
+        return Response::json(201, $out)->withHeader(CapabilitySecret::HEADER, $issued['secret']);
     }
 
     // ------------------------------------------------------------------- get
 
     public function get(string $uid): Response
     {
-        $cart = $this->carts->findByUid($uid, $this->idShop());
-        if (!$cart) {
-            return UcpError::response('cart_not_found', 'Cart not found', 404);
+        $cart = $this->ownedCart($uid);
+        if ($cart instanceof Response) {
+            return $cart;
         }
         if ($pinError = $this->pin?->check($cart['ucp_version'] ?? null)) {
             return $pinError;
-        }
-        if ($authError = $this->cartAuthError($cart)) {
-            return $authError;
         }
 
         return Response::json(200, $this->formatCart($cart));
@@ -103,15 +111,12 @@ final class CartService
     /** @param array<string,mixed> $body */
     public function update(string $uid, array $body): Response
     {
-        $cart = $this->carts->findByUid($uid, $this->idShop());
-        if (!$cart) {
-            return UcpError::response('cart_not_found', 'Cart not found', 404);
+        $cart = $this->ownedCart($uid);
+        if ($cart instanceof Response) {
+            return $cart;
         }
         if ($pinError = $this->pin?->check($cart['ucp_version'] ?? null)) {
             return $pinError;
-        }
-        if ($authError = $this->cartAuthError($cart)) {
-            return $authError;
         }
 
         $lineItems = $body['line_items'] ?? null;
@@ -119,7 +124,7 @@ final class CartService
             return UcpError::response('missing_line_items', 'line_items array is required', 400);
         }
 
-        $formatted = $this->formatLineItems($lineItems);
+        $formatted = LineItems::format($lineItems, (int) $this->context->language->id);
         if ($formatted instanceof Response) {
             return $formatted;
         }
@@ -137,15 +142,12 @@ final class CartService
 
     public function delete(string $uid): Response
     {
-        $cart = $this->carts->findByUid($uid, $this->idShop());
-        if (!$cart) {
-            return UcpError::response('cart_not_found', 'Cart not found', 404);
+        $cart = $this->ownedCart($uid);
+        if ($cart instanceof Response) {
+            return $cart;
         }
         if ($pinError = $this->pin?->check($cart['ucp_version'] ?? null)) {
             return $pinError;
-        }
-        if ($authError = $this->cartAuthError($cart)) {
-            return $authError;
         }
 
         $this->carts->delete($uid, $this->idShop());
@@ -160,23 +162,14 @@ final class CartService
 
     // -------------------------------------------------------------- checkout
 
-    /**
-     * Convert the cart into a checkout session. Delegates to CheckoutService so
-     * pricing, fulfillment and payment-handler preparation follow the single
-     * canonical session-creation path; the cart is discarded once the session
-     * exists. The agent continues against /checkout-sessions/{id}.
-     */
     public function checkout(string $uid, ?string $idempotencyKey): Response
     {
-        $cart = $this->carts->findByUid($uid, $this->idShop());
-        if (!$cart) {
-            return UcpError::response('cart_not_found', 'Cart not found', 404);
+        $cart = $this->ownedCart($uid);
+        if ($cart instanceof Response) {
+            return $cart;
         }
         if ($pinError = $this->pin?->check($cart['ucp_version'] ?? null)) {
             return $pinError;
-        }
-        if ($authError = $this->cartAuthError($cart)) {
-            return $authError;
         }
 
         $stored = json_decode($cart['line_items'] ?? '[]', true) ?: [];
@@ -197,6 +190,10 @@ final class CartService
             $sessionLineItems[] = $entry;
         }
 
+        if (!$this->carts->claim($uid, $this->idShop())) {
+            return UcpError::response('cart_already_checked_out', 'This cart was already checked out', 409);
+        }
+
         $checkout = new CheckoutService(
             $this->context,
             $this->registry,
@@ -205,74 +202,31 @@ final class CartService
             '',
             $this->pin
         );
-        $response = $checkout->create(['line_items' => $sessionLineItems], $idempotencyKey);
+        try {
+            $response = $checkout->create(['line_items' => $sessionLineItems], $idempotencyKey);
+        } catch (\Throwable $e) {
+            \PrestaShopLogger::addLog('[FD UCP] Cart checkout failed after the cart was claimed: ' . $e->getMessage(), 3);
 
-        // Only discard the cart once the session was actually created.
-        if ($response->status === 201) {
-            $this->carts->delete($uid, $this->idShop());
+            return self::checkoutFailed();
+        }
+        if ($response->status >= 300) {
+            \PrestaShopLogger::addLog('[FD UCP] Cart checkout failed after the cart was claimed: HTTP ' . $response->status . ' ' . json_encode($response->body['messages'] ?? null), 3);
+
+            return self::checkoutFailed(is_array($response->body['messages'] ?? null) ? $response->body['messages'] : []);
         }
 
         return $response;
     }
 
-    // --------------------------------------------------------------- helpers
-
-    /**
-     * Build formatted line items from agent input, or return a UcpError
-     * Response if any product is invalid. Mirrors CheckoutService line pricing.
-     *
-     * @param array<int,mixed> $lineItems
-     * @return array<int,array<string,mixed>>|Response
-     */
-    private function formatLineItems(array $lineItems)
+    private static function checkoutFailed(array $causes = []): Response
     {
-        $idLang = (int) $this->context->language->id;
-        $formatted = [];
+        $response = UcpError::response('cart_checkout_failed', 'The cart was used up but no checkout session was created. Build a new cart.', 500);
+        $response->body['messages'] = array_merge($response->body['messages'] ?? [], $causes);
 
-        foreach ($lineItems as $item) {
-            $idProduct = (int) ($item['item']['id'] ?? 0);
-            $idAttr = (int) ($item['item']['variant_id'] ?? 0);
-            $qty = (int) ($item['quantity'] ?? 1);
-            if ($qty < 1) {
-                return UcpError::response('invalid_quantity', "Quantity for product $idProduct must be a positive integer", 422);
-            }
-
-            $product = new \Product($idProduct, false, $idLang);
-            if (!\Validate::isLoadedObject($product) || !$product->active) {
-                return UcpError::response('invalid_product', "Product $idProduct not found or not purchasable", 422);
-            }
-            if (!\Product::isAvailableWhenOutOfStock((int) $product->out_of_stock)) {
-                $available = (int) \StockAvailable::getQuantityAvailableByProduct($idProduct, $idAttr ?: null);
-                if ($qty > $available) {
-                    return UcpError::response(
-                        'insufficient_stock',
-                        "Requested quantity ($qty) exceeds available stock ($available) for product $idProduct",
-                        422
-                    );
-                }
-            }
-
-            $price = Formatter::toMinor((float) \Product::getPriceStatic($idProduct, true, $idAttr ?: null));
-            $itemTotal = $price * $qty;
-            $name = is_array($product->name) ? ($product->name[$idLang] ?? reset($product->name)) : $product->name;
-
-            $entry = [
-                'id' => 'li_' . (count($formatted) + 1),
-                'item' => ['id' => (string) $idProduct, 'title' => (string) $name, 'price' => $price],
-                'quantity' => $qty,
-                'totals' => [
-                    ['type' => 'subtotal', 'amount' => $itemTotal],
-                    ['type' => 'total', 'amount' => $itemTotal],
-                ],
-            ];
-            if ($idAttr > 0) {
-                $entry['item']['variant_id'] = (string) $idAttr;
-            }
-            $formatted[] = $entry;
-        }
-
-        return $formatted;
+        return $response;
     }
+
+    // --------------------------------------------------------------- helpers
 
     /**
      * @param array<string,mixed> $cart
@@ -301,32 +255,6 @@ final class CartService
             ],
             'messages' => [],
         ];
-    }
-
-    /**
-     * Authorization guard for an existing cart: returns an error Response to send
-     * back, or null when the caller may proceed. Distinguishes "no secret
-     * supplied" — answered with an actionable message naming the header — from
-     * "wrong secret". Both are 403; the code/message tells them apart. The secret
-     * may arrive as `UCP-Cart-Secret` or `UCP-Session-Secret` (see Router).
-     *
-     * @param array<string,mixed> $cart
-     */
-    private function cartAuthError(array $cart): ?Response
-    {
-        $storedHash = (string) ($cart['cart_secret_hash'] ?? '');
-        switch (CapabilitySecret::classify($storedHash, $this->sessionSecret)) {
-            case CapabilitySecret::MISSING:
-                return UcpError::response(
-                    'cart_secret_required',
-                    'This cart requires its capability secret. Send the `cart_secret` from the create response as the `UCP-Cart-Secret` (or `UCP-Session-Secret`) request header.',
-                    403
-                );
-            case CapabilitySecret::MISMATCH:
-                return UcpError::response('cart_ownership', 'Cart belongs to a different agent', 403);
-            default:
-                return null;
-        }
     }
 
     private static function uuid(): string

@@ -13,6 +13,8 @@ if (!defined('_PS_VERSION_')) {
  */
 final class Fulfillment
 {
+    private const OPTION_ID = '/^\d+(,\d+)*$/';
+
     /**
      * @param array<string,mixed> $destination UCP destination (echoed back, given an id)
      * @param string[] $lineItemIds
@@ -29,15 +31,13 @@ final class Fulfillment
 
         if (!empty($optionsList[$idAddress])) {
             foreach ($optionsList[$idAddress] as $key => $option) {
-                // Each $key is a delivery-option string like "2,"; one carrier per group here.
-                $carrierId = (int) rtrim($key, ',');
-                $title = $option['carrier_list'][$carrierId]['instance']->name
+                $id = rtrim((string) $key, ',');
+                $title = $option['carrier_list'][(int) $id]['instance']->name
                     ?? ($option['name'] ?? 'Shipping');
                 $costFloat = $option['total_price_with_tax']
                     ?? $option['totalPriceWithTax']
                     ?? 0;
                 $cost = (int) round(((float) $costFloat) * 100);
-                $id = (string) $carrierId;
                 if ($firstId === null) {
                     $firstId = $id;
                 }
@@ -47,15 +47,6 @@ final class Fulfillment
                     'totals' => [['type' => 'total', 'amount' => $cost]],
                 ];
             }
-        }
-
-        if ($options === []) {
-            $options[] = [
-                'id' => 'free_shipping',
-                'title' => 'Free Shipping',
-                'totals' => [['type' => 'total', 'amount' => 0]],
-            ];
-            $firstId = 'free_shipping';
         }
 
         $validIds = array_column($options, 'id');
@@ -93,5 +84,53 @@ final class Fulfillment
     {
         $sel = $fulfillment['methods'][0]['groups'][0]['selected_option_id'] ?? null;
         return is_string($sel) ? $sel : null;
+    }
+
+    /** @return string[] */
+    public static function offeredOptionKeys(\Cart $cart): array
+    {
+        $idAddress = (int) $cart->id_address_delivery;
+        $options = $idAddress > 0 ? ($cart->getDeliveryOptionList()[$idAddress] ?? []) : [];
+
+        return array_map('strval', array_keys($options));
+    }
+
+    public static function appliedOptionId(\Cart $cart): ?string
+    {
+        $idAddress = (int) $cart->id_address_delivery;
+        $applied = $idAddress > 0 ? $cart->getDeliveryOption(null, true, false) : false;
+        $key = is_array($applied) ? ($applied[$idAddress] ?? null) : null;
+        $id = is_string($key) ? rtrim($key, ',') : '';
+
+        return preg_match(self::OPTION_ID, $id) === 1 ? $id : null;
+    }
+
+    public static function coverageError(\Cart $cart): ?string
+    {
+        if ((int) $cart->id_address_delivery <= 0) {
+            return 'The delivery address is not in a country this shop ships to';
+        }
+        if (!$cart->isVirtualCart() && self::offeredOptionKeys($cart) === []) {
+            return 'No carrier delivers to this address';
+        }
+
+        return null;
+    }
+
+    public static function selectionError(\Cart $cart, array $session): ?string
+    {
+        $coverageError = self::coverageError($cart);
+        if ($coverageError !== null || $cart->isVirtualCart()) {
+            return $coverageError;
+        }
+        $fulfillment = $session['fulfillment'] ?? null;
+        $fulfillment = is_string($fulfillment) ? json_decode($fulfillment, true) : $fulfillment;
+        $selected = self::selectedCarrierId(is_array($fulfillment) ? $fulfillment : null);
+        $isCarrier = $selected !== null && preg_match(self::OPTION_ID, $selected) === 1;
+        if (!$isCarrier || self::appliedOptionId($cart) !== $selected) {
+            return 'The selected carrier is not available for this delivery address';
+        }
+
+        return null;
     }
 }
