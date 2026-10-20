@@ -134,7 +134,7 @@ final class Router
 
         // /orders/{id}
         if (($segments[0] ?? '') === 'orders') {
-            $order = new OrderService($this->context, $sessionSecret);
+            $order = new OrderService($this->context, $sessionSecret, $pin);
             $id = $segments[1] ?? null;
             if ($id !== null && $method === 'GET') {
                 return $order->get((int) $id);
