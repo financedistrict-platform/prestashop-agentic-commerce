@@ -169,8 +169,9 @@ final class CheckoutService
         if ($pinError = $this->pinError($session)) {
             return $pinError;
         }
-        if (in_array($session['status'], ['canceled', 'completed', 'complete_in_progress', 'payment_pending', 'requires_escalation'], true)) {
-            return UcpError::response('session_' . $session['status'], 'Session is ' . $session['status'], 409);
+        $status = UcpStatus::resolve($session);
+        if (!in_array($status, ['incomplete', 'ready_for_complete'], true)) {
+            return UcpError::response('session_' . $status, 'Session is ' . $status, 409);
         }
 
         try {
@@ -250,18 +251,14 @@ final class CheckoutService
         if ($pinError = $this->pinError($session)) {
             return $pinError;
         }
-        if ($session['status'] === 'completed') {
-            return UcpError::response('session_completed', 'Cannot cancel a completed session', 409);
-        }
-        if (in_array($session['status'], ['payment_pending', 'requires_escalation'], true)) {
-            return UcpError::response('session_' . $session['status'], 'Session is ' . $session['status'], 409);
+        if (!$this->sessions->cancelIfIncomplete($uid, $this->idShop())) {
+            $status = UcpStatus::resolve($this->sessions->findByUid($uid, $this->idShop()) ?? $session);
+
+            return UcpError::response('session_' . $status, 'Session is ' . $status, 409);
         }
 
-        $this->sessions->update($uid, $this->idShop(), [
-            'status' => 'canceled',
-            'updated_at' => date('Y-m-d H:i:s'),
-        ]);
-        $session['status'] = 'canceled';
+        $session = $this->sessions->findByUid($uid, $this->idShop()) ?? ['status' => 'canceled'] + $session;
+
         return Response::json(200, Formatter::checkoutSession($session, $this->registry));
     }
 
@@ -331,7 +328,7 @@ final class CheckoutService
 
         // Atomic, once-only claim (NFR-2).
         if (!$this->sessions->claimForCompletion($uid, $this->idShop())) {
-            return UcpError::response('session_in_progress', 'Session is already being completed', 409);
+            return UcpError::response('settlement_in_progress', 'Session is already being completed', 409);
         }
         if ($resumed) {
             $this->sessions->update($uid, $this->idShop(), ['expires_at' => PaymentIntegrity::quoteExpiry()]);
@@ -404,17 +401,21 @@ final class CheckoutService
             return $this->holdForConfirmation($uid, $session, $credentialDigest, 'handler_exception');
         }
 
+        $txRef = is_string($result['transaction_reference'] ?? null) && $result['transaction_reference'] !== '' ? $result['transaction_reference'] : null;
         if (empty($result['success']) && !empty($result['review'])) {
-            return $this->escalate($uid, $session, (string) ($result['error'] ?? 'settlement_unresolved'));
+            return $this->escalate($uid, $session, (string) ($result['error'] ?? 'settlement_unresolved'), $txRef);
         }
         if (empty($result['success']) && !empty($result['pending'])) {
             return $this->holdForConfirmation($uid, $session, $credentialDigest, (string) ($result['reason'] ?? 'settlement_outcome_unknown'));
         }
         if (empty($result['success']) && $resumed) {
-            return $this->escalate($uid, $session, (string) ($result['error'] ?? 'settlement_unresolved'));
+            return $this->escalate($uid, $session, (string) ($result['error'] ?? 'settlement_unresolved'), $txRef);
+        }
+        if (!empty($result['success']) && empty($result['id_order'])) {
+            return $this->escalate($uid, $session, 'order_not_created', $txRef);
         }
 
-        if (empty($result['success']) || empty($result['id_order'])) {
+        if (empty($result['success'])) {
             $released = json_decode($session['payment_meta'] ?? '{}', true) ?: [];
             unset($released[self::PENDING_DIGEST_KEY]);
             $this->sessions->update($uid, $this->idShop(), ['status' => 'incomplete', 'payment_meta' => json_encode($released)]);
@@ -462,26 +463,46 @@ final class CheckoutService
         ]);
         $session = $this->sessions->findByUid($uid, $this->idShop()) ?? $session;
 
-        return Response::json(202, Formatter::checkoutSession($session, $this->registry));
+        return Response::json(202, self::withMessage(
+            Formatter::checkoutSession($session, $this->registry),
+            'info',
+            'settlement_pending',
+            'The payment is still being confirmed. Retry complete with the same credential.'
+        ));
     }
 
-    private function escalate(string $uid, array $session, string $reason): Response
+    private function escalate(string $uid, array $session, string $reason, ?string $txRef = null): Response
     {
         \PrestaShopLogger::addLog("[FD UCP] Payment held for merchant review: session $uid, reason $reason. Funds may have moved; check the transaction before releasing or refunding.", 3);
         $paymentMeta = json_decode($session['payment_meta'] ?? '{}', true) ?: [];
         unset($paymentMeta[self::PENDING_DIGEST_KEY]);
         $paymentMeta['review_reason'] = $reason;
+        if ($txRef !== null) {
+            $paymentMeta['transaction_reference'] = $txRef;
+        }
         $this->sessions->update($uid, $this->idShop(), [
             'status' => 'requires_escalation',
             'payment_meta' => json_encode($paymentMeta),
             'updated_at' => date('Y-m-d H:i:s'),
         ]);
+        $session = $this->sessions->findByUid($uid, $this->idShop()) ?? $session;
 
-        return UcpError::response(
+        return Response::json(200, self::withMessage(
+            Formatter::checkoutSession($session, $this->registry),
+            'warning',
             'payment_requires_review',
-            "The payment needs merchant review ($reason). Do not pay again; contact the merchant.",
-            409
+            "The payment needs merchant review ($reason). Do not pay again; contact the merchant."
+        ));
+    }
+
+    private static function withMessage(array $body, string $type, string $code, string $content): array
+    {
+        $body['messages'] = array_merge(
+            [['type' => $type, 'code' => $code, 'content' => $content]],
+            is_array($body['messages'] ?? null) ? $body['messages'] : []
         );
+
+        return $body;
     }
 
     private static function credentialDigest(mixed $credential): string

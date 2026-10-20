@@ -159,6 +159,64 @@ final class PaymentPendingTest extends TestCase
         $this->assertSame('payment_pending', $this->row()['status']);
     }
 
+    #[DataProvider('statusesThatRefuseCancel')]
+    public function test_cancel_is_refused_with_the_ucp_status_code(string $status, string $code): void
+    {
+        $this->sessions->rows[self::SESSION_ID]['status'] = $status;
+
+        $response = $this->service()->cancel(self::SESSION_ID);
+
+        $this->assertSame(409, $response->status, (string) json_encode($response->body));
+        $this->assertSame($code, $response->body['messages'][0]['code']);
+        $this->assertSame($status, $this->row()['status']);
+    }
+
+    public static function statusesThatRefuseCancel(): array
+    {
+        return [
+            'complete_in_progress' => ['complete_in_progress', 'session_complete_in_progress'],
+            'payment_pending' => ['payment_pending', 'session_complete_in_progress'],
+            'requires_escalation' => ['requires_escalation', 'session_requires_escalation'],
+            'completed' => ['completed', 'session_completed'],
+            'canceled' => ['canceled', 'session_canceled'],
+        ];
+    }
+
+    #[DataProvider('statusesThatRefuseCancel')]
+    public function test_update_is_refused_with_the_ucp_status_code(string $status, string $code): void
+    {
+        $this->sessions->rows[self::SESSION_ID]['status'] = $status;
+
+        $response = $this->service()->update(self::SESSION_ID, ['buyer' => ['first_name' => 'Anne']]);
+
+        $this->assertSame(409, $response->status, (string) json_encode($response->body));
+        $this->assertSame($code, $response->body['messages'][0]['code']);
+        $this->assertSame($status, $this->row()['status']);
+    }
+
+    public function test_cancel_of_an_incomplete_session_cancels_it(): void
+    {
+        $this->sessions->rows[self::SESSION_ID]['status'] = 'incomplete';
+
+        $response = $this->service()->cancel(self::SESSION_ID);
+
+        $this->assertSame(200, $response->status, (string) json_encode($response->body));
+        $this->assertSame('canceled', $response->body['status']);
+        $this->assertSame('canceled', $this->row()['status']);
+    }
+
+    public function test_cancel_that_loses_the_race_to_complete_answers_with_the_new_status(): void
+    {
+        $this->sessions->rows[self::SESSION_ID]['status'] = 'incomplete';
+        $this->sessions->statusBeforeCancel = 'complete_in_progress';
+
+        $response = $this->service()->cancel(self::SESSION_ID);
+
+        $this->assertSame(409, $response->status, (string) json_encode($response->body));
+        $this->assertSame('session_complete_in_progress', $response->body['messages'][0]['code']);
+        $this->assertSame('complete_in_progress', $this->row()['status']);
+    }
+
     public function test_retry_after_the_quote_expired_still_reaches_the_gateway(): void
     {
         $this->pendingSession();
@@ -189,7 +247,7 @@ final class PaymentPendingTest extends TestCase
 
         $response = $this->complete();
 
-        $this->assertSame(409, $response->status, (string) json_encode($response->body));
+        $this->assertSame(200, $response->status, (string) json_encode($response->body));
         $this->assertSame('payment_requires_review', $response->body['messages'][0]['code']);
         $this->assertSame('requires_escalation', $this->row()['status']);
         $this->assertSame(409, $this->complete(['type' => 'x402', 'authorization' => ['nonce' => '0xdd', 'from' => '0xbb']])->status);
@@ -259,7 +317,7 @@ final class PaymentPendingTest extends TestCase
         $response = $this->complete();
 
         $this->assertSame(409, $response->status);
-        $this->assertSame('session_in_progress', $response->body['messages'][0]['code']);
+        $this->assertSame('settlement_in_progress', $response->body['messages'][0]['code']);
         $this->assertSame([], $this->handler->settled);
     }
 
@@ -291,7 +349,8 @@ final class PaymentPendingTest extends TestCase
 
         $response = $this->complete();
 
-        $this->assertSame(409, $response->status, (string) json_encode($response->body));
+        $this->assertSame(200, $response->status, (string) json_encode($response->body));
+        $this->assertSame('requires_escalation', $response->body['status']);
         $this->assertSame('payment_requires_review', $response->body['messages'][0]['code']);
         $this->assertStringContainsString($reason, $response->body['messages'][0]['content']);
         $this->assertSame('requires_escalation', $this->row()['status']);
@@ -302,6 +361,42 @@ final class PaymentPendingTest extends TestCase
     public static function reviewReasons(): array
     {
         return [['authorization_consumed'], ['settlement_unresolved']];
+    }
+
+    public function test_review_with_a_transaction_keeps_the_transaction_for_the_merchant(): void
+    {
+        $this->handler->script = [['success' => false, 'review' => true, 'transaction_reference' => '0xfeed', 'error' => 'Order could not be placed']];
+
+        $response = $this->complete();
+
+        $this->assertSame(200, $response->status, (string) json_encode($response->body));
+        $this->assertSame('requires_escalation', $response->body['status']);
+        $this->assertSame('requires_escalation', $this->row()['status']);
+        $meta = json_decode($this->row()['payment_meta'], true);
+        $this->assertSame('0xfeed', $meta['transaction_reference']);
+        $this->assertArrayNotHasKey('pending_credential_sha256', $meta);
+        $this->assertEmpty($this->row()['id_order'] ?? null);
+    }
+
+    public function test_settled_payment_without_an_order_is_escalated_not_failed(): void
+    {
+        $this->handler->script = [['success' => true, 'transaction_reference' => '0xfeed', 'network' => 'eip155:84532']];
+
+        $response = $this->complete();
+
+        $this->assertSame(200, $response->status, (string) json_encode($response->body));
+        $this->assertSame('requires_escalation', $this->row()['status']);
+        $this->assertSame('0xfeed', json_decode($this->row()['payment_meta'], true)['transaction_reference'] ?? null);
+    }
+
+    public function test_held_payment_tells_the_agent_settlement_is_pending(): void
+    {
+        $this->handler->script = [self::PENDING];
+
+        $response = $this->complete();
+
+        $this->assertSame(202, $response->status);
+        $this->assertContains('settlement_pending', array_column($response->body['messages'], 'code'));
     }
 
     public function test_escalated_session_cannot_be_completed_updated_or_canceled(): void
@@ -373,6 +468,60 @@ final class PaymentPendingTest extends TestCase
         $this->assertStringContainsString('reason execution_failed', implode("
 ", $this->loggedMessages()));
         $this->assertCount(2, $this->loggedMessages());
+    }
+
+    private static function settleFixture(): array
+    {
+        return json_decode((string) file_get_contents(dirname(__DIR__) . '/fixtures/prism/settle-replies.json'), true, 512, JSON_THROW_ON_ERROR);
+    }
+
+    public static function settleRows(): array
+    {
+        $rows = [];
+        foreach (self::settleFixture()['rows'] as $row) {
+            $rows[$row['name']] = [$row];
+        }
+
+        return $rows;
+    }
+
+    private static function resumedHandlerReply(array $row): array
+    {
+        $fixture = self::settleFixture();
+        if ($row['http'] !== 200) {
+            return in_array($row['http'], $fixture['httpPendingStatuses'], true)
+                ? self::PENDING + ['reason' => 'http_' . $row['http']]
+                : ['success' => false, 'error' => 'http_' . $row['http']];
+        }
+        $reason = (string) ($row['body']['errorReason'] ?? '');
+        $declinedPrefix = array_filter($fixture['declinedPrefixes'], static fn (string $prefix): bool => str_starts_with($reason, $prefix)) !== [];
+        if (in_array($reason, $fixture['pendingReasons'], true)) {
+            return self::PENDING + ['reason' => $reason];
+        }
+        if (in_array($reason, $fixture['declinedReasons'], true) || $declinedPrefix) {
+            return ['success' => false, 'error' => $reason];
+        }
+
+        return ['success' => false, 'review' => true, 'error' => $reason] + (isset($row['body']['transaction']) ? ['transaction_reference' => $row['body']['transaction']] : []);
+    }
+
+    #[DataProvider('settleRows')]
+    public function test_resumed_payment_follows_the_shared_settle_contract(array $row): void
+    {
+        $this->pendingSession();
+        $this->handler->script = [self::resumedHandlerReply($row)];
+
+        $response = $this->complete();
+
+        if ($row['resume'] === 'pending') {
+            $this->assertSame(202, $response->status, (string) json_encode($response->body));
+            $this->assertSame('payment_pending', $this->row()['status']);
+
+            return;
+        }
+        $this->assertSame(200, $response->status, (string) json_encode($response->body));
+        $this->assertSame('requires_escalation', $response->body['status']);
+        $this->assertSame('requires_escalation', $this->row()['status']);
     }
 
     public function test_a_definite_rejection_is_not_logged_as_a_held_payment(): void

@@ -11,7 +11,7 @@ use FD\PrismPayment\Prism\SettlementSummary;
 
 class FdPsPrism extends PaymentModule
 {
-    public const VERSION = '0.7.11';
+    public const VERSION = '0.7.12';
 
     public function __construct()
     {

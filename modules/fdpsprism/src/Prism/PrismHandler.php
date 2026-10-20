@@ -27,11 +27,11 @@ final class PrismHandler implements PaymentHandlerInterface, VersionedPaymentHan
 
     public const CACHE_TTL = 300;
 
-    private const PENDING_REASONS = ['settlement_pending', 'unexpected_settle_error', 'receipt_timeout'];
+    public const PENDING_REASONS = ['settlement_pending', 'unexpected_settle_error', 'checkout_settlement_in_progress'];
 
-    private const REVIEW_REASONS = ['authorization_consumed', 'settlement_unresolved'];
+    public const REVIEW_REASONS = ['authorization_consumed', 'settlement_unresolved', 'checkout_already_settled'];
 
-    private const DEFINITE_REASONS = [
+    public const DEFINITE_REASONS = [
         'authorization_mismatch',
         'unsupported_network',
         'unsupported_token',
@@ -65,6 +65,11 @@ final class PrismHandler implements PaymentHandlerInterface, VersionedPaymentHan
         'balance_check_failed',
         'balance_verification_failed',
         'unauthorized',
+        'quote_not_found',
+        'quote_mismatch',
+        'credential_already_used',
+        'invalid_exact_evm_payload_authorization_value',
+        'invalid_exact_evm_payload_authorization_time_bounds',
     ];
 
     private const LEGACY_ID = 'x402';
@@ -307,19 +312,35 @@ final class PrismHandler implements PaymentHandlerInterface, VersionedPaymentHan
 
             return self::unsettled($result, ($input['resumed'] ?? false) === true);
         }
-        if (isset($result['network']) && $result['network'] !== $payment->network) {
-            \PrestaShopLogger::addLog('[FD Prism] Settlement network ' . json_encode($result['network']) . ' differs from the signed network ' . $payment->network . '; no order placed for transaction ' . $txRef, 3);
 
-            return ['success' => false, 'error' => 'Settlement network does not match the signed payment'];
+        return $this->afterSettled($result, $txRef, $payment->network, $authorizationKey, $input['cart'], $paidAmount);
+    }
+
+    private function afterSettled(array $result, string $txRef, string $network, string $authorizationKey, \Cart $cart, int $paidAmount): array
+    {
+        if (isset($result['network']) && $result['network'] !== $network) {
+            \PrestaShopLogger::addLog('[FD Prism] Settlement network ' . json_encode($result['network']) . ' differs from the signed network ' . $network . '; no order placed for transaction ' . $txRef, 3);
+
+            return self::reviewAfterSettle($txRef, 'Settlement network does not match the signed payment');
         }
 
         if (!$this->recorded($authorizationKey, ReplayKey::transaction($txRef))) {
             \PrestaShopLogger::addLog('[FD Prism] Settlement transaction ' . $txRef . ' could not be bound to this payment; no order placed', 3);
 
-            return ['success' => false, 'error' => 'Settlement transaction was already used by another payment'];
+            return self::reviewAfterSettle($txRef, 'Settlement transaction was already used by another payment');
         }
 
-        return $this->placeOrder($input['cart'], $txRef, $payment->network, Formatter::toMajor($paidAmount));
+        $placed = $this->placeOrder($cart, $txRef, $network, Formatter::toMajor($paidAmount));
+        if (($placed['success'] ?? false) !== true) {
+            return self::reviewAfterSettle($txRef, (string) ($placed['error'] ?? 'Order could not be placed'));
+        }
+
+        return $placed;
+    }
+
+    private static function reviewAfterSettle(string $txRef, string $error): array
+    {
+        return ['success' => false, 'review' => true, 'transaction_reference' => $txRef, 'error' => $error];
     }
 
     private static function pending(string $reason = 'settlement_outcome_unknown'): array
@@ -334,14 +355,16 @@ final class PrismHandler implements PaymentHandlerInterface, VersionedPaymentHan
         if (in_array($key, self::PENDING_REASONS, true)) {
             return self::pending($key);
         }
+        $txRef = $result['transaction'] ?? null;
+        $withTx = is_string($txRef) && $txRef !== '' ? ['transaction_reference' => $txRef] : [];
         if (in_array($key, self::REVIEW_REASONS, true)) {
-            return ['success' => false, 'review' => true, 'error' => $reason];
+            return ['success' => false, 'review' => true, 'error' => $reason] + $withTx;
         }
-        if (preg_match('/^http_4\d\d$/', $key) === 1 || in_array($key, self::DEFINITE_REASONS, true)) {
+        if (preg_match('/^http_4(?!08$|09$|29$)\d\d$/', $key) === 1 || in_array($key, self::DEFINITE_REASONS, true)) {
             return ['success' => false, 'error' => $result['error'] ?? $reason];
         }
         if ($resumed) {
-            return ['success' => false, 'review' => true, 'error' => $key !== '' ? $key : 'settlement_unresolved'];
+            return ['success' => false, 'review' => true, 'error' => $key !== '' ? $key : 'settlement_unresolved'] + $withTx;
         }
 
         return self::pending($key !== '' ? $key : 'unlisted_reason');

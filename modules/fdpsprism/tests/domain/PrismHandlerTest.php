@@ -562,7 +562,18 @@ final class PrismHandlerTest extends TestCase
             ['execution_failed: Transaction would revert: execution reverted: FiatTokenV2: authorization is used or canceled', 'execution_failed'],
             ['settlement_failed', 'settlement_failed'],
             ['transaction_reverted', 'transaction_reverted'],
+            ['receipt_timeout', 'receipt_timeout'],
         ];
+    }
+
+    public function test_a_resumed_retry_with_an_unlisted_reason_keeps_the_gateway_transaction_for_review(): void
+    {
+        $tx = '0x' . str_repeat('dd', 32);
+
+        $result = $this->settleResumed(['success' => false, 'transaction' => $tx, 'errorReason' => 'receipt_timeout']);
+
+        $this->assertTrue($result['review'] ?? false);
+        $this->assertSame($tx, $result['transaction_reference'] ?? null);
     }
 
     public function test_a_resumed_retry_without_a_reason_goes_to_review(): void
@@ -584,7 +595,7 @@ final class PrismHandlerTest extends TestCase
 
     public static function transientReasons(): array
     {
-        return [['unexpected_settle_error'], ['receipt_timeout'], ['settlement_pending']];
+        return [['unexpected_settle_error'], ['settlement_pending'], ['checkout_settlement_in_progress']];
     }
 
     public function test_a_resumed_retry_with_no_gateway_answer_stays_pending(): void
@@ -658,6 +669,47 @@ final class PrismHandlerTest extends TestCase
         $this->assertSame([], $this->client->paths);
     }
 
+    #[DataProvider('failuresAfterSettlement')]
+    public function test_every_failure_after_a_settled_payment_needs_review_with_the_transaction(string $failure): void
+    {
+        $tx = '0x' . str_repeat('cd', 32);
+        $cart = new Cart();
+        $this->client->responses['POST /api/v2/payment/settle'] = ['success' => true, 'transaction' => $tx, 'network' => $failure === 'network mismatch' ? 'eip155:1' : 'eip155:84532'];
+        match ($failure) {
+            'ledger bind fails' => $this->ledger->refuseTransactions = true,
+            'invalid cart' => $cart->id = 0,
+            'invalid customer' => $cart->id_customer = 0,
+            'order placement throws' => $this->module = new FdTestFlakyPaymentModule(),
+            'order id missing' => $this->module = new FdTestOrderlessPaymentModule(),
+            default => null,
+        };
+
+        $result = $this->settleThroughCore([
+            'session' => $this->session(),
+            'cart' => $cart,
+            'instrument_type' => 'x402',
+            'credential' => $this->x402Credential(),
+            'checkout_meta' => $this->checkoutMeta(),
+        ]);
+
+        $this->assertFalse($result['success']);
+        $this->assertTrue($result['review'] ?? false, (string) json_encode($result));
+        $this->assertSame($tx, $result['transaction_reference'] ?? null);
+        $this->assertArrayNotHasKey('pending', $result);
+    }
+
+    public static function failuresAfterSettlement(): array
+    {
+        return array_map(static fn (string $failure): array => [$failure], [
+            'network mismatch' => 'network mismatch',
+            'ledger bind fails' => 'ledger bind fails',
+            'invalid cart' => 'invalid cart',
+            'invalid customer' => 'invalid customer',
+            'order placement throws' => 'order placement throws',
+            'order id missing' => 'order id missing',
+        ]);
+    }
+
     public function test_retry_of_a_settled_payment_places_the_order_once(): void
     {
         $this->assertTrue($this->settleWithGateway(null)['pending']);
@@ -686,6 +738,16 @@ final class FdTestPrismClient extends PrismClient
         $this->bodies["$method $path"] = $body;
 
         return $this->responses["$method $path"] ?? null;
+    }
+}
+
+final class FdTestOrderlessPaymentModule extends PaymentModule
+{
+    public function validateOrder(...$args)
+    {
+        $this->validated[] = $args;
+
+        return true;
     }
 }
 
